@@ -1,0 +1,27 @@
+{
+    "files.encoding": "utf8",
+    "workbench.colorCustomizations": {
+        "titleBar.activeBackground": "#ae00ff"
+    },
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.useLibraryCodeForTypes": true,
+    "python.analysis.typeCheckingMode": "strict",
+    "python.analysis.diagnosticMode": "workspace",
+    "ruff.lint.enable": true,
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.patterns": {
+        "pyproject.toml": "uv.lock, .python-version, *.code-workspace, .gitignore",
+        "README.md": "CONTRIBUTING.md, CHANGELOG.md, LICENSE, NOTICE",
+        "config.py": "config*.py, .env*, env*.py, settings.py",
+    },
+    "files.exclude": {
+        "**/.ruff_cache": true,
+        "**/*.venv": true,
+    },
+    "[python]": {
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "always",
+            "source.organizeImports.ruff": "explicit"
+        }
+    }
+}
