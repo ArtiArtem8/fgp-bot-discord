@@ -1,27 +1,38 @@
-"""Docstring for main."""
+"""Main entry point for the FGP Discord bot application.
+
+Handles bot initialization, configuration loading, and event loop management.
+Responsible for setting up command handlers, extensions, and core bot functionality.
+"""
 
 import asyncio
 import logging
+import logging.config
 
 from discord import Intents
 from discord.ext import commands
 
-from config import DISCORD_BOT_PREFIX, DISCORD_BOT_TOKEN
+from config import DISCORD_BOT_PREFIX, DISCORD_BOT_TOKEN, LOGGING_CONFIG
+from core.exceptions import EnvVarError
 
+logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("FGPBot")
 
-intents = Intents.default()
+intents = Intents.all()
 
 
 class FGPBot(commands.Bot):
-    """docstring."""
+    """Core bot instance for handling Discord interactions and commands."""
 
     def __init__(self) -> None:
-        """Docstring for __init__."""
+        """Initialize the bot instance with configured settings."""
         super().__init__(command_prefix=DISCORD_BOT_PREFIX, intents=intents)
 
     async def setup_hook(self) -> None:
-        """Docstring for setup_hook."""
+        """Async initialization hook for pre-connection setup.
+
+        - Extension loading
+        - Global command tree synchronization.
+        """
         extentions: list[str] = []
         for ext in extentions:
             await self.load_extension(ext)
@@ -30,9 +41,14 @@ class FGPBot(commands.Bot):
 
 
 if __name__ == "__main__":
+    logger.info("Starting FGPBot")
+
+    if DISCORD_BOT_TOKEN is None:
+        var = "DISCORD_BOT_TOKEN"
+        raise EnvVarError(var)
 
     async def _main() -> None:
         async with FGPBot() as bot:
-            await bot.start(DISCORD_BOT_TOKEN or "Token_is_missing")
+            await bot.start(DISCORD_BOT_TOKEN)
 
     asyncio.run(_main())
