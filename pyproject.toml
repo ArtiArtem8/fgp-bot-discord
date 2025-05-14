@@ -7,14 +7,27 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["aiosqlite>=0.21.0", "discord-py>=2.5.2", "dotenv>=0.9.9"]
+dependencies = [
+    "aiofiles>=24.1.0",
+    "aiosqlite>=0.21.0",
+    "discord-py>=2.5.2",
+    "dotenv>=0.9.9",
+    "pydantic>=2.11.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3.5", "pytest-asyncio>=0.26.0"]
+[tool.pytest.ini_options]
+pythonpath = "."
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [dependency-groups]
 dev = ["ruff>=0.11.9"]
 
 
 [tool.ruff]
-exclude = [".git", ".ruff_cache", ".venv", ".vscode", "site-packages"]
+exclude = [".git", ".ruff_cache", ".venv", ".vscode", "site-packages", "tests"]
 line-length = 88
 indent-width = 4
 target-version = "py312"

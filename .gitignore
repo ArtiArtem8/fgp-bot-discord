@@ -10,3 +10,4 @@ wheels/
 .venv
 fgp-bot-discord.code-workspace
 .env
+data/

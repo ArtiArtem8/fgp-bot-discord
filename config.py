@@ -1,4 +1,4 @@
-"""Docstring for config."""
+"""Configuration for for fgp-bot-discord."""
 
 import os
 from pathlib import Path
@@ -11,7 +11,6 @@ ENCODING = "utf-8"
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_BOT_PREFIX = "!fgp"
-
 ROOT_DIR = Path(__file__).parent
 
 DATA_DIR = ROOT_DIR / "data"
@@ -20,17 +19,27 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = DATA_DIR / "fgp_bot.log"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
+DATABASE_FILE = DATA_DIR / "file.db"
+
+MEME_DIR = DATA_DIR / "memes"
+MEME_DIR.mkdir(parents=True, exist_ok=True)
+
+PRIVATE_DIR = DATA_DIR / "private"
+PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
+
 
 LOGGING_CONFIG: dict[str, object] = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "detailed": {
-            "format": "%(asctime)s %(levelname)s [%(name)s]: %(message)s",
+            "format": "{asctime} {levelname:<8} [{name}]: {message}",
             "datefmt": "%Y-%m-%d %H:%M:%S",
+            "style": "{",
         },
         "simple": {
-            "format": "%(levelname)s: %(name)s: %(message)s",
+            "format": "[{levelname:<8}] {name}: {message}",
+            "style": "{",
         },
     },
     "handlers": {
@@ -54,13 +63,18 @@ LOGGING_CONFIG: dict[str, object] = {
     },
     "loggers": {
         "discord": {
-            "handlers": ["file_handler"],
-            "level": ("WARNING", "DEBUG")[LOG_LEVEL == "DEBUG"],
+            "handlers": ["file_handler", "console"],
+            "level": ("ERROR", "DEBUG")[LOG_LEVEL == "DEBUG"],
             "propagate": False,
         },
         "cogs": {
             "handlers": ["file_handler", "console"],
             "level": ("INFO", "DEBUG")[LOG_LEVEL == "DEBUG"],
+            "propagate": False,
+        },
+        "aiosqlite": {
+            "handlers": ["file_handler"],
+            "level": ("ERROR", "DEBUG")[LOG_LEVEL == "DEBUG"],
             "propagate": False,
         },
     },

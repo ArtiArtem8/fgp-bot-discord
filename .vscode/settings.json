@@ -23,5 +23,10 @@
             "source.fixAll.ruff": "always",
             "source.organizeImports.ruff": "explicit"
         }
-    }
+    },
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
 }
