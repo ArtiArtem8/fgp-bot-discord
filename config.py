@@ -27,6 +27,9 @@ MEME_DIR.mkdir(parents=True, exist_ok=True)
 PRIVATE_DIR = DATA_DIR / "private"
 PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
 
+CONVERTED_DIR = DATA_DIR / "converted"
+CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
+
 
 LOGGING_CONFIG: dict[str, object] = {
     "version": 1,

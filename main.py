@@ -11,8 +11,10 @@ import logging.config
 from discord import Intents
 from discord.ext import commands
 
-from config import DISCORD_BOT_PREFIX, DISCORD_BOT_TOKEN, LOGGING_CONFIG
+from config import DATABASE_FILE, DISCORD_BOT_PREFIX, DISCORD_BOT_TOKEN, LOGGING_CONFIG
+from core.database import FileDatabase
 from core.exceptions import EnvVarError
+from core.file_manager import FileManager
 
 logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("FGPBot")
@@ -43,12 +45,21 @@ class FGPBot(commands.Bot):
 if __name__ == "__main__":
     logger.info("Starting FGPBot")
 
+    db = FileDatabase(DATABASE_FILE)
+
     if DISCORD_BOT_TOKEN is None:
         var = "DISCORD_BOT_TOKEN"
         raise EnvVarError(var)
 
     async def _main() -> None:
-        async with FGPBot() as bot:
-            await bot.start(DISCORD_BOT_TOKEN)
+        try:
+            await db.connect()
+            fm = FileManager(db)
+            await fm.load_all_files()
+            await fm.compress_all_large_files()
+        finally:
+            await db.conn.close()
+        # async with FGPBot() as bot:
+        #     await bot.start(DISCORD_BOT_TOKEN)
 
     asyncio.run(_main())

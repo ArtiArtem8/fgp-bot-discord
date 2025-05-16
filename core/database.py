@@ -222,6 +222,28 @@ class FileDatabase:
                 return None
             return await self._row_to_file_record(updated)
 
+    async def delete_file_record_by_hash(self, file_hash: str) -> None:
+        """Delete a file record from the database.
+
+        :param file_hash: The file hash of the file record to delete.
+        :type file_hash: str
+        """
+        sql = "DELETE FROM file_tracking WHERE file_hash = ?"
+        async with self.conn.cursor() as cursor:
+            await cursor.execute(sql, (file_hash,))
+            await self.conn.commit()
+
+    async def delete_file_record_by_path(self, file_path: Path) -> None:
+        """Delete a file record from the database based on its file path.
+
+        :param file_path: The file path of the file record to delete.
+        :type file_path: Path
+        """
+        sql = "DELETE FROM file_tracking WHERE file_path = ?"
+        async with self.conn.cursor() as cursor:
+            await cursor.execute(sql, (str(file_path),))
+            await self.conn.commit()
+
     async def get_count_of_type(
         self,
         category: str,
