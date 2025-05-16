@@ -25,7 +25,6 @@ class TestDatabase:
     ):
         # Create test record
         record = sample_file_record
-        print(database.db_path, file=open("db_path.txt", "w"))
         # Insert and verify
         await database.insert_file_record(record)
         # Retrieve by hash
@@ -158,7 +157,6 @@ class TestDatabase:
         async def _increment_counter():
             updated = await database.increment_send_count(record.file_hash, guild_id)
             assert updated is not None
-            print(updated.guild_usage[guild_id])
             return 
 
         # Simulate concurrent increments
