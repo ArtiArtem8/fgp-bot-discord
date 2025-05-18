@@ -13,6 +13,9 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_BOT_PREFIX = "!fgp"
 ROOT_DIR = Path(__file__).parent
 
+REACT_CHANCE = 160  # 0.625%
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 mega bytes
+
 DATA_DIR = ROOT_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -26,6 +29,12 @@ MEME_DIR.mkdir(parents=True, exist_ok=True)
 
 PRIVATE_DIR = DATA_DIR / "private"
 PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
+
+CATEGORY_MAP: dict[Path, str] = {
+    MEME_DIR: "meme",
+    PRIVATE_DIR: "private",
+}
+
 
 CONVERTED_DIR = DATA_DIR / "converted"
 CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,7 +76,7 @@ LOGGING_CONFIG: dict[str, object] = {
     "loggers": {
         "discord": {
             "handlers": ["file_handler", "console"],
-            "level": ("ERROR", "DEBUG")[LOG_LEVEL == "DEBUG"],
+            "level": ("ERROR", "INFO")[LOG_LEVEL == "DEBUG"],
             "propagate": False,
         },
         "cogs": {

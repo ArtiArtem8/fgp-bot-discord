@@ -25,8 +25,9 @@ intents = Intents.all()
 class FGPBot(commands.Bot):
     """Core bot instance for handling Discord interactions and commands."""
 
-    def __init__(self) -> None:
-        """Initialize the bot instance with configured settings."""
+    def __init__(self, file_manager: FileManager) -> None:
+        """Initialize the bot instance with configured settings and file manager."""
+        self.file_manager = file_manager
         super().__init__(command_prefix=DISCORD_BOT_PREFIX, intents=intents)
 
     async def setup_hook(self) -> None:
@@ -35,31 +36,35 @@ class FGPBot(commands.Bot):
         - Extension loading
         - Global command tree synchronization.
         """
-        extentions: list[str] = []
-        for ext in extentions:
+        extensions: list[str] = ["cogs.local_cog"]
+        for ext in extensions:
             await self.load_extension(ext)
-        await self.tree.sync()
-        logger.info("Application commands synced")
+        cmds = await self.tree.sync()
+        logger.info("Synced %d global commands", len(cmds))
+        logger.debug("Synced commands: %s", cmds)
+
+
+async def main() -> None:
+    """Async function to start the bot and manage resources."""
+    logger.info("Starting FGPBot")
+
+    if DISCORD_BOT_TOKEN is None:
+        msg = "DISCORD_BOT_TOKEN"
+        raise EnvVarError(msg)
+
+    db = FileDatabase(DATABASE_FILE)
+    await db.connect()
+
+    try:
+        file_manager = FileManager(db)
+        bot = FGPBot(file_manager=file_manager)
+
+        async with bot:
+            await bot.start(DISCORD_BOT_TOKEN)
+    finally:
+        await db.conn.close()
+        logger.info("Database connection closed")
 
 
 if __name__ == "__main__":
-    logger.info("Starting FGPBot")
-
-    db = FileDatabase(DATABASE_FILE)
-
-    if DISCORD_BOT_TOKEN is None:
-        var = "DISCORD_BOT_TOKEN"
-        raise EnvVarError(var)
-
-    async def _main() -> None:
-        try:
-            await db.connect()
-            fm = FileManager(db)
-            await fm.load_all_files()
-            await fm.compress_all_large_files()
-        finally:
-            await db.conn.close()
-        # async with FGPBot() as bot:
-        #     await bot.start(DISCORD_BOT_TOKEN)
-
-    asyncio.run(_main())
+    asyncio.run(main())
