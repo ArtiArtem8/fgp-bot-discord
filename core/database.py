@@ -115,9 +115,11 @@ class FileDatabase:
         :return: The file record if found, otherwise None.
         :rtype: FileRecord | None
         """
-        sql = """SELECT * FROM file_tracking WHERE file_hash = ?"""
+        sql = (
+            """SELECT * FROM file_tracking WHERE file_hash = ? OR converted_hash = ?"""
+        )
         async with self.conn.cursor() as cursor:
-            await cursor.execute(sql, (file_hash,))
+            await cursor.execute(sql, (file_hash, file_hash))
             row = await cursor.fetchone()
             if row is None:
                 return None
@@ -225,13 +227,28 @@ class FileDatabase:
     async def delete_file_record_by_hash(self, file_hash: str) -> None:
         """Delete a file record from the database.
 
-        :param file_hash: The file hash of the file record to delete.
-        :type file_hash: str
+        :param str file_hash: The file hash of the file record to delete.
         """
         sql = "DELETE FROM file_tracking WHERE file_hash = ?"
         async with self.conn.cursor() as cursor:
             await cursor.execute(sql, (file_hash,))
             await self.conn.commit()
+
+    async def get_file_record_by_path(self, file_path: Path) -> FileRecord | None:
+        """Get a file record from the database based on its file path.
+
+        :param file_path: The file path of the file record to retrieve.
+        :type file_path: Path
+        :return: The file record if found, otherwise None.
+        :rtype: FileRecord | None
+        """
+        sql = "SELECT * FROM file_tracking WHERE file_path = ?"
+        async with self.conn.cursor() as cursor:
+            await cursor.execute(sql, (str(file_path),))
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            return await self._row_to_file_record(row)
 
     async def delete_file_record_by_path(self, file_path: Path) -> None:
         """Delete a file record from the database based on its file path.
@@ -323,3 +340,15 @@ class FileDatabase:
             await cursor.execute(sql, (category,))
             rows = await cursor.fetchall()
             return tuple(Path(row[0]) for row in rows)
+
+    async def get_file_records_by_filename(self, filename: str) -> list[FileRecord]:
+        """Get all file records by filename using a LIKE query.
+
+        :param str filename: _description_
+        :return list[FileRecord]: _description_
+        """
+        sql = "SELECT * FROM file_tracking WHERE file_path LIKE ?"
+        async with self.conn.cursor() as cursor:
+            await cursor.execute(sql, (f"%{filename}%",))
+            rows = await cursor.fetchall()
+            return [await self._row_to_file_record(row) for row in rows]
