@@ -32,6 +32,16 @@ async def hash_file(file_path: Path) -> str:
     return file_hash.hexdigest()
 
 
+async def write_to_file(file_path: Path, data: bytes) -> None:
+    """Write data to a file asynchronously.
+
+    :param Path file_path: The path to the file to write to.
+    :param bytes data: The data to write to the file.
+    """
+    async with aiofiles.open(file_path, "wb") as f:
+        await f.write(data)
+
+
 async def get_file_size(file_path: Path) -> int:
     """Get the size of the file asynchronously.
 

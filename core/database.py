@@ -20,6 +20,7 @@ class FileDatabase:
 
     async def connect(self) -> None:
         """Connect to the database and create tables if they don't exist."""
+        logger.debug("Connecting to database: %s", self.db_path)
         self.conn = await aiosqlite.connect(self.db_path)
         self.conn.row_factory = aiosqlite.Row
         await self._create_tables()

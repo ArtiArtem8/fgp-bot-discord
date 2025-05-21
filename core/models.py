@@ -1,10 +1,10 @@
-"""Models for the database."""
+"""Models for the database and API responses."""
 
 import json
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import AliasPath, BaseModel, Field, field_serializer, field_validator
 
 
 class GuildUsage(BaseModel):
@@ -62,3 +62,46 @@ class FileRecord(BaseModel):
         :return dict[str, GuildUsage]: Dictionary of GuildUsage objects.
         """
         return {k: GuildUsage(**vv) for k, vv in json.loads(v).items()}
+
+
+class MediaFile(BaseModel):
+    """Represents a media file's technical details from the API response.
+
+    :param int size: File size in bytes
+    :param str hash: MD5 hash of the file (aliased from 'md5' in API)
+    :param str url: Direct URL to access the file
+    :param str extension: File extension (aliased from 'ext' in API)
+    """
+
+    size: int = Field(..., description="File size in bytes")
+    hash: str = Field(..., validation_alias="md5")
+    url: str
+    extension: str = Field(..., validation_alias="ext")
+
+
+class MediaContent(BaseModel):
+    """Contains processed content metadata from API response.
+
+    :param int content_id: Unique content identifier (aliased from 'id' in API)
+    :param MediaFile file: Detailed file information container
+    :param str | None sample_url: URL for sample version if available
+    :param str | None preview_url: URL for preview version if available
+    :param str rating: Content rating classification
+    :param dict[str, list[str]] tags: Categorized taxonomy tags
+    """
+
+    content_id: int = Field(..., validation_alias="id")
+    file: MediaFile
+    sample_url: str | None = Field(None, validation_alias=AliasPath("sample", "url"))
+    preview_url: str | None = Field(None, validation_alias=AliasPath("preview", "url"))
+    rating: str
+    tags: dict[str, list[str]] = Field(default_factory=dict, repr=False)
+
+
+class ContentResponse(BaseModel):
+    """Container for API response containing multiple media content items.
+
+    :param list[MediaContent] posts: List of media content entries
+    """
+
+    posts: list[MediaContent]

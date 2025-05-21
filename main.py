@@ -12,6 +12,7 @@ from discord import Intents
 from discord.ext import commands
 
 from config import DATABASE_FILE, DISCORD_BOT_PREFIX, DISCORD_BOT_TOKEN, LOGGING_CONFIG
+from core.api_client import APIConfig, MediaAPIClient
 from core.database import FileDatabase
 from core.exceptions import EnvVarError
 from core.file_manager import FileManager
@@ -25,9 +26,10 @@ intents = Intents.all()
 class FGPBot(commands.Bot):
     """Core bot instance for handling Discord interactions and commands."""
 
-    def __init__(self, file_manager: FileManager) -> None:
+    def __init__(self, file_manager: FileManager, api_client: MediaAPIClient) -> None:
         """Initialize the bot instance with configured settings and file manager."""
         self.file_manager = file_manager
+        self.api_client = api_client
         super().__init__(command_prefix=DISCORD_BOT_PREFIX, intents=intents)
 
     async def setup_hook(self) -> None:
@@ -47,23 +49,27 @@ class FGPBot(commands.Bot):
 async def main() -> None:
     """Async function to start the bot and manage resources."""
     logger.info("Starting FGPBot")
+    config = APIConfig()
 
     if DISCORD_BOT_TOKEN is None:
         msg = "DISCORD_BOT_TOKEN"
         raise EnvVarError(msg)
 
     db = FileDatabase(DATABASE_FILE)
-    await db.connect()
+    api_client = MediaAPIClient(config)
 
+    await db.connect()
     try:
         file_manager = FileManager(db)
-        bot = FGPBot(file_manager=file_manager)
+        bot = FGPBot(file_manager=file_manager, api_client=api_client)
 
         async with bot:
             await bot.start(DISCORD_BOT_TOKEN)
     finally:
         await db.conn.close()
-        logger.info("Database connection closed")
+        logger.debug("Database connection closed")
+        await api_client.close()
+        logger.debug("API Client connection closed")
 
 
 if __name__ == "__main__":
