@@ -38,7 +38,12 @@ class ListenerCog(commands.Cog):
         if message.author == self.bot.user:
             return
         if secrets.randbelow(REACT_CHANCE) < 1:
-            logger.info("%s Повезло с шансом %0.2f", message.author, 1 / REACT_CHANCE)
+            logger.info(
+                "%s is lucky enough to get a reaction (%s chance) on %s",
+                message.author,
+                format(1 / REACT_CHANCE, ".3%"),
+                message.jump_url,
+            )
             emoji_pool = self._get_available_emojis(message)
             await message.add_reaction(secrets.choice(emoji_pool or ["👍"]))
 

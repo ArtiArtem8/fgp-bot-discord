@@ -53,7 +53,7 @@ async def get_file_size(file_path: Path) -> int:
     return (await aios.stat(file_path)).st_size
 
 
-async def is_file_exists(file_path: Path) -> bool:
+async def file_exists(file_path: Path) -> bool:
     """Check if the file exists asynchronously.
 
     :param file_path: The path to the file to check.

@@ -11,6 +11,7 @@ ENCODING = "utf-8"
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_BOT_PREFIX = "!fgp"
+DISCORD_BOT_OWNER_ID = int(os.getenv("DISCORD_BOT_OWNER_ID", "0"))
 ROOT_DIR = Path(__file__).parent
 
 REACT_CHANCE = 160  # 0.625%
@@ -19,7 +20,9 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 mega bytes
 DATA_DIR = ROOT_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-LOG_FILE = DATA_DIR / "fgp_bot.log"
+LOG_FILENAME = os.getenv("LOG_FILENAME", "fgp_bot.log")
+
+LOG_FILE = DATA_DIR / LOG_FILENAME
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 DATABASE_FILE = DATA_DIR / "file.db"

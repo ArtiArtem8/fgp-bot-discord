@@ -8,18 +8,56 @@ import asyncio
 import base64
 import logging
 import os
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any
 
 import aiohttp
 from aiolimiter import AsyncLimiter
 
-from core.models import ContentResponse
+from core.enums import Category, DateRange, FileType, Rating, SortOrder
+from core.models import ContentResponse, TagResponse
 
 logger = logging.getLogger(__name__)
 
-type ResponseData = dict[str, Any] | bytes
-type ResponseResult = tuple[int, ResponseData]
+ResponseData = dict[str, Any] | bytes | list[dict[str, Any]]
+ResponseResult = tuple[int, ResponseData]
+
+
+@dataclass(frozen=True)
+class ContentParams:
+    """Class to hold the parameters for fetching content from the API.
+
+    :param list[str] | None tags: List of tags to filter posts (default: None)
+    :param Rating | None rating: Content rating filter (default: None)
+    :param FileType | None file_type: File type filter (default: None)
+    :param SortOrder | None sort_order: Sort order for posts (default: None)
+    """
+
+    tags: list[str] | None = None
+    rating: Rating | None = None
+    file_type: FileType | None = None
+    sort_order: SortOrder | None = None
+    date_range: DateRange | None = None
+
+    def build_tags(self) -> str:
+        """Build the combined tag string for API requests.
+
+        :return str: formatted tags string
+        """
+        tags = self.tags.copy() if self.tags else []
+
+        # Add new filters
+        if self.rating:
+            tags.append(f"rating:{self.rating.lower()}")
+        if self.file_type:
+            tags.append(f"type:{self.file_type.lower()}")
+        if self.sort_order:
+            tags.append(f"order:{self.sort_order.lower()}")
+        if self.date_range:
+            tags.append(f"date:{self.date_range.lower()}")
+
+        return " ".join(tags).strip()
 
 
 class APIError(Exception):
@@ -74,7 +112,7 @@ class MediaAPIClient:
         self.semaphore = asyncio.Semaphore(self.config.max_workers)
         self.session = aiohttp.ClientSession(
             headers=self._create_headers(),
-            timeout=aiohttp.ClientTimeout(total=self.config.request_timeout),
+            timeout=aiohttp.ClientTimeout(self.config.request_timeout),
         )
         self.workers: list[asyncio.Task[None]] = [
             asyncio.create_task(self._worker()) for _ in range(self.config.max_workers)
@@ -139,47 +177,43 @@ class MediaAPIClient:
         :param asyncio.Future future: Future to set the result or exception
         """
         logger.debug("Processing request: %s", url)
-        try:
-            async with self.session.get(url=url, params=params) as response:
-                if response.status in (
-                    HTTPStatus.TOO_MANY_REQUESTS,
-                    HTTPStatus.SERVICE_UNAVAILABLE,
-                ):
-                    msg = "Rate limit exceeded"
-                    raise APIError(msg)  # noqa: TRY301
-                response.raise_for_status()
+        async with self.session.get(url=url, params=params) as response:
+            if response.status in (
+                HTTPStatus.TOO_MANY_REQUESTS,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            ):
+                future.set_exception(Exception("API rate limit exceeded"))
+                return
+            response.raise_for_status()
 
-                content_type: str = response.headers.get("Content-Type", "")
-                data: ResponseData = (
-                    await response.json()
-                    if "application/json" in content_type
-                    else await response.read()
-                )
-                future.set_result((response.status, data))
-        except aiohttp.ClientError as e:
-            future.set_exception(Exception(f"Network error: {e}"))
-        except Exception as e:  # noqa: BLE001
-            future.set_exception(e)
+            content_type: str = response.headers.get("Content-Type", "")
+            data: ResponseData = (
+                await response.json()
+                if "application/json" in content_type
+                else await response.read()
+            )
+            future.set_result((response.status, data))
 
     async def get_content(
         self,
         limit: int = 10,
-        tags: list[str] | None = None,
-        rating: str | None = None,
+        content_params: ContentParams | None = None,
         page: str | None = None,
     ) -> ContentResponse:
         """Fetch content from the API with the specified parameters.
 
         :param int limit: Maximum number of posts to retrieve (default: 10, max: 320)
-        :param list[str] | None tags: List of tags to filter posts (default: None)
-        :param str | None rating: Rating filter ('s', 'q', 'e') (default: None)
+        :param ContentParams | None content_params: Content parameters (default: None)
         :param str | None page: Page number or cursor for pagination (default: None)
         :return ContentResponse: Model containing the API response
         :raises Exception: If the API request fails or returns an error
+        :raises APIError: If the API response is not a dictionary
         """
+        if content_params is None:
+            content_params = ContentParams()  # defaults are none
         params: dict[str, int | str] = {
             "limit": min(limit, 320),
-            "tags": self._build_tags(tags, rating),
+            "tags": content_params.build_tags(),
         }
         if page is not None:
             params["page"] = page
@@ -188,33 +222,42 @@ class MediaAPIClient:
         if not isinstance(data, dict):
             msg = "API response is not a dictionary"
             raise APIError(msg)
+        logger.debug("Fetched posts: %s", data)
         return ContentResponse.model_validate(data)
 
     async def get_tags(
         self,
         search: str | None = None,
-        category: int | None = None,
-        order: str = "date",
+        category: Category | None = None,
+        order: str = "count",
         limit: int = 75,
-    ) -> ResponseData:
+    ) -> TagResponse:
         """Fetch tags from the API with the specified parameters.
 
         :param str | None search: Search term for tag names (default: None)
-        :param int | None category: Category filter for tags (default: None)
-        :param str order: Order of the tags (default: "date")
+        :param Category | None category: Category filter for tags (default: None)
+        :param str order: Order of the tags (default: "count")
         :param int limit: Maximum number of tags to retrieve (default: 75, max: 320)
-        :return ResponseData: Dictionary containing the API response
+        :return TagResponse: TagResponse containing the API response
         :raises Exception: If the API request fails or returns an error
+        :raises APIError: If the API response is not a dictionary
         """
-        params: dict[str, str | int] = {
+        params: dict[str, bool | int | str] = {
             "search[order]": order,
+            "search[hide_empty]": "true",
+            # "search[status]": "active",
             "limit": min(limit, 320),
         }
         if search is not None:
             params["search[name_matches]"] = search
         if category is not None:
             params["search[category]"] = category
-        return await self._enqueue_request("tags.json", params)
+        data = await self._enqueue_request("tags.json", params)
+        if not isinstance(data, (dict, list)):
+            msg = "API response is not a dictionary"
+            raise APIError(msg)
+        logger.debug("Fetched tags: %s", data)
+        return TagResponse.model_validate(data)
 
     async def download_file(self, url: str) -> bytes:
         """Download a file from the API and return the binary data.
@@ -230,19 +273,6 @@ class MediaAPIClient:
             raise APIError(msg)
         return response
 
-    def _build_tags(self, tags: list[str] | None, rating: str | None) -> str:
-        """Build a tag string for API requests.
-
-        :param list[str] | None tags: List of tags to include
-        :param str | None rating: Rating filter to append
-        :return str: Formatted tag string
-        """
-        tags = tags or []
-        tags = [t for t in tags if not t.startswith("rating:")]
-        if rating and rating.lower() in {"s", "q", "e"}:
-            tags.append(f"rating:{rating.lower()}")
-        return " ".join(tags).strip()
-
     async def _enqueue_request(
         self,
         endpoint: str | None,
@@ -253,7 +283,8 @@ class MediaAPIClient:
         :param str endpoint: API endpoint (e.g., "posts.json")
         :param dict[str, Any] params: Query parameters for the request
         :return ResponseData: Processed API response
-        :raises Exception: If the request fails
+        :raises Exception: If the connection fails
+        :raises APIError: If the API status code indicates an error
         """
         future: asyncio.Future[ResponseResult] = asyncio.Future()
         url = f"{self.config.base_url}/{endpoint}"
@@ -276,7 +307,7 @@ class MediaAPIClient:
         :param Any data: Response data from the API
         :param int status: HTTP status code
         :return ResponseData: Parsed response data
-        :raises Exception: If the status code indicates an error
+        :raises APIError: If the status code indicates an error
         """
         if HTTPStatus(status).is_success:
             return data

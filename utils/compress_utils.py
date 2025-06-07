@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import platform
 import tempfile
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from utils import get_file_size, remove_file
 logger = logging.getLogger(__name__)
 
 MIN_VIDEO_BITRATE_KBPS = 10
+MIN_AUDIO_BITRATE_KBPS = 8
 
 
 async def get_video_duration(file_path: Path) -> float | None:
@@ -19,7 +21,7 @@ async def get_video_duration(file_path: Path) -> float | None:
     # fmt: off
     cmd = [
         "ffprobe",
-        "-v","info",
+        "-v","error",
         "-show_entries",
         "format=duration",
         "-of",
@@ -34,7 +36,7 @@ async def get_video_duration(file_path: Path) -> float | None:
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        logger.error("ffprobe failed for %s: %s", file_path, stderr.decode())
+        logger.error("ffprobe failed for %s (return code %d): %s", file_path, proc.returncode, stderr.decode().strip())
         return None
     try:
         return float(stdout.strip())
@@ -71,115 +73,232 @@ def allocate_bitrates(target_size: int, duration: float) -> tuple[float, float]:
             video_bps = total_bitrate_total_bps * proportion_video
             audio_bps = total_bitrate_total_bps * proportion_audio
         else:
-            msg = "Minimum bitrates are zero"
-            raise ValueError(msg)
+            logger.warning(
+                "Minimum bitrate sum to zero, cannot allocate proportionally.",
+            )
+            video_bps = total_bitrate_total_bps * 0.8
+            audio_bps = total_bitrate_total_bps * 0.2
 
-    if video_bps < 0 or audio_bps < 0:
-        msg = "Target size is too small to allocate bitrates"
-        raise ValueError(msg)
+    video_bps = max(video_bps, 0)
+    audio_bps = max(audio_bps, 0)
 
     return video_bps, audio_bps
 
 
-async def compress_video(original_path: Path, target_size: int) -> Path:
+async def compress_video(
+    original_path: Path,
+    target_size: int,
+    output_container: str | None = None,
+    video_codec: str | None = None,
+    audio_codec: str | None = None,
+) -> Path:
+    """Compress a video to a target size using two-pass encoding.
+
+    Args:
+        original_path: Path to the original video file.
+        target_size: Target file size in bytes.
+        output_container: Desired output container (e.g., "mp4", "webm").
+                          If None, chosen based on codecs or defaults.
+        video_codec: Desired video codec (e.g., "libx264", "libvpx-vp9").
+                     Defaults to "libx264".
+        audio_codec: Desired audio codec (e.g., "aac", "libopus").
+                     Defaults to "aac".
+
+    Returns:
+        Path to the compressed video file.
+
+    Raises:
+        ValueError: If video duration cannot be obtained or is invalid.
+        RuntimeError: If FFmpeg processing fails.
+
+    """
     """Compress a video to a target size using two-pass encoding."""
     duration = await get_video_duration(original_path)
     target_size_mb = target_size / (1024 * 1024)
     target_size = int(
         target_size * 0.95,
     )  # Reduce target size by 5% to be less than target
-    if duration is None:
+    if duration is None or duration < 0:
         msg = f"Could not get duration for {original_path}"
         raise ValueError(msg)
 
     # Allocate bitrates
     video_bps, audio_bps = allocate_bitrates(target_size, duration)
     video_bitrate_kbps = max(int(video_bps / 1000), MIN_VIDEO_BITRATE_KBPS)
-    audio_bitrate_kbps = int(audio_bps / 1000) or 8
+    audio_bitrate_kbps = max(int(audio_bps / 1000), MIN_AUDIO_BITRATE_KBPS)
+    effective_vcodec = video_codec or "libx264"
+    effective_acodec = audio_codec or "aac"
+    effective_pix_fmt = None
+    if output_container:
+        effective_container_format = output_container.lower()
+    elif effective_vcodec in ("libvpx-vp9", "vp9", "libaom-av1", "av1", "vp8"):
+        effective_container_format = "webm"
+    else:  # Default to mp4 for H.264/AAC and other cases
+        effective_container_format = "mp4"
+    if effective_container_format == "webm":
+        if effective_vcodec not in ("libvpx-vp9", "vp9", "libaom-av1", "av1", "vp8"):
+            logger.warning(
+                "Output container is WebM. Changing video codec from '%s' to 'libvpx-vp9'.",
+                effective_vcodec,
+            )
+            effective_vcodec = "libvpx-vp9"
+        if effective_acodec not in ("libopus", "opus", "vorbis"):
+            logger.warning(
+                "Output container is WebM. Changing audio codec from '%s' to 'libopus'.",
+                effective_acodec,
+            )
+            effective_acodec = "libopus"
+    elif effective_container_format == "mp4":
+        if effective_vcodec not in ("libx264", "libx265", "h264", "h265"):
+            if (
+                effective_vcodec in ("libvpx-vp9", "vp9", "libaom-av1", "av1", "vp8")
+                and video_codec is not None
+            ):
+                logger.info(
+                    "Using %s in MP4 container as specified/derived.",
+                    effective_vcodec,
+                )
+            else:
+                logger.warning(
+                    "Output container is MP4. Changing video codec from '%s' to 'libx264' for compatibility.",
+                    effective_vcodec,
+                )
+                effective_vcodec = "libx264"
 
-    # Temporary output path
+        if effective_acodec not in ("aac",):
+            if (
+                effective_acodec in ("libopus", "opus", "vorbis")
+                and audio_codec is not None
+            ):
+                logger.info(
+                    "Using %s in MP4 container as specified/derived.",
+                    effective_acodec,
+                )
+            else:
+                logger.warning(
+                    "Output container is MP4. Changing audio codec from '%s' to 'aac' for compatibility.",
+                    effective_acodec,
+                )
+                effective_acodec = "aac"
+    if effective_vcodec in ("libx264", "libvpx-vp9"):
+        effective_pix_fmt = "yuv420p"
+    final_output_extension = f".{effective_container_format}"
     compressed_path = original_path.with_name(
-        f"{original_path.stem}_compressed{original_path.suffix}",
+        f"{original_path.stem}_compressed{final_output_extension}",
     )
     logger.debug(
-        "video bitrate: %d kbps (audio bitrate: %d kbps)",
+        "Targeting: Container=%s, VCodec=%s, ACodec=%s, PixFmt=%s",
+        effective_container_format,
+        effective_vcodec,
+        effective_acodec,
+        effective_pix_fmt,
+    )
+    logger.debug(
+        "Input: %s (%.2fs, %.2fMB)",
+        original_path.name,
+        duration,
+        (await get_file_size(original_path) / (1024 * 1024))
+        if original_path.exists()
+        else 0,
+    )
+    logger.debug(
+        "Calculated bitrates: Video=%dkbps, Audio=%dkbps",
         video_bitrate_kbps,
         audio_bitrate_kbps,
     )
-    actual_filesize = await get_file_size(original_path)
-    logger.debug(
-        "duration: %.2fs; actual filesize: %.2fMB",
-        duration,
-        actual_filesize / 1024 / 1024,
-    )
-    possible_filesize = (video_bitrate_kbps + audio_bitrate_kbps) * duration / 8 / 1024
-    logger.debug("possible filesize: %.2fMB", possible_filesize)
-    logger.debug("Scaling factor: %.2f", (actual_filesize) / possible_filesize)
+    logger.debug("Output path: %s", compressed_path)
     # Use temporary directory for passlogfile
     with tempfile.TemporaryDirectory() as temp_dir:
-        passlogfile = Path(temp_dir) / "ffmpeg2pass"
+        passlogfile = Path(temp_dir) / f"{original_path.name}_ffmpeg2pass"
+        null_device = "NUL" if platform.system() == "Windows" else "/dev/null"
 
         # fmt: off
         cmd1 = [
-            "ffmpeg",
-            "-y",
+            "ffmpeg", "-y",
             "-i", str(original_path),
-            "-c:v", "libx264",
+            "-c:v", effective_vcodec,
             "-b:v", f"{video_bitrate_kbps}k",
             "-pass", "1",
             "-an",
-            "-vsync", "cfr",
+            "-fps_mode", "cfr",
             "-preset", "medium",
-            "-f", "null", "NUL",
-            "-passlogfile", str(passlogfile),
         ]
+        if effective_pix_fmt:
+            cmd1.extend(["-pix_fmt", effective_pix_fmt])
+
+        cmd1.extend([
+            "-passlogfile", str(passlogfile),
+            "-f", "null",
+            null_device,
+        ])
+        logger.debug("FFmpeg Pass 1 command: %s", " ".join(cmd1))
         proc1 = await asyncio.create_subprocess_exec(
             *cmd1,
             stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr1 = await proc1.communicate()
+        stdout1, stderr1 = await proc1.communicate()
         if proc1.returncode != 0:
             msg = (
-                f"First pass failed for {original_path} - {proc1.returncode}: "
-                f"{stderr1.decode()}"
+                f"First pass failed for {original_path} (rc: {proc1.returncode}):\n"
+                f"STDOUT: {stdout1.decode(errors='ignore').strip()}\n"
+                f"STDERR: {stderr1.decode(errors='ignore').strip()}"
             )
             raise RuntimeError(msg)
 
         # fmt: off
         cmd2 = [
-            "ffmpeg",
+            "ffmpeg", "-y",
             "-i", str(original_path),
-            "-c:v", "libx264",
+            "-c:v", effective_vcodec,
             "-b:v", f"{video_bitrate_kbps}k",
             "-pass", "2",
-            "-c:a", "aac",
+            "-c:a", effective_acodec,
             "-b:a", f"{audio_bitrate_kbps}k",
-            "-vsync", "cfr",
+            "-fps_mode", "cfr",
             "-preset", "medium",
-            str(compressed_path),
-            "-passlogfile", str(passlogfile),
         ]
+        if effective_pix_fmt:
+            cmd2.extend(["-pix_fmt", effective_pix_fmt])
+        cmd2.extend([
+            "-passlogfile", str(passlogfile),
+            "-f", effective_container_format, # Explicitly set output container format
+            str(compressed_path),
+        ])
         proc2 = await asyncio.create_subprocess_exec(
             *cmd2,
             stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr2 = await proc2.communicate()
+        logger.debug("FFmpeg Pass 2 command: %s", " ".join(cmd2))
+        stdout2, stderr2  = await proc2.communicate()
         if proc2.returncode != 0:
+            await remove_file(compressed_path)
             msg = (
-                f"Second pass failed for {original_path} - {proc1.returncode}: "
-                f"{stderr2.decode()}"
+                f"Second pass failed for {original_path} (rc: {proc2.returncode}):\n"
+                f"STDOUT: {stdout2.decode(errors='ignore').strip()}\n"
+                f"STDERR: {stderr2.decode(errors='ignore').strip()}"
             )
+            logger.error(msg)
             raise RuntimeError(msg)
 
     # Verify output size
-    compressed_size_mb = await get_file_size(compressed_path) / (1024 * 1024)
-    if compressed_size_mb > target_size_mb:
+    final_size_mb = await get_file_size(compressed_path) / (1024 * 1024)
+    logger.info(
+        "Compression for %s complete. Output: %s (%.2fMB, target: ~%.2fMB from original target %.2fMB)",
+        original_path.name,
+        compressed_path.name,
+        final_size_mb,
+        target_size / (1024 * 1024),
+        target_size_mb,
+    )
+    if final_size_mb > target_size_mb:
         logger.warning(
-            "Compressed file %s is %.2fMB, exceeds target %dMB",
-            compressed_path,
-            compressed_size_mb,
+            "Compressed file %s (%.2fMB), exceeds target %.2fMB",
+            compressed_path.name,
+            final_size_mb,
             target_size_mb,
         )
 

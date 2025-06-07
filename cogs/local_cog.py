@@ -1,4 +1,4 @@
-"""Cog for handling local file storage and retrieval operations in Discord.
+"""Cog for handling local file storage and retrieval operations.
 
 This module provides commands for sharing memes and private content,
 enforcing NSFW checks, and providing server-specific file size limits.
@@ -26,7 +26,7 @@ PRIVATE = CATEGORY_MAP.get(PRIVATE_DIR, "private")
 
 
 class LocalCog(commands.Cog):
-    """Cog for managing and serving locally stored content in Discord."""
+    """Cog for managing and serving locally stored content."""
 
     def __init__(self, bot: FGPBot) -> None:
         """Initialize the LocalCog with bot instance and dependencies.
@@ -516,6 +516,12 @@ class LocalCog(commands.Cog):
         :param discord.Attachment file: The file attachment to add.
         :param str category: The category for the file (e.g., 'meme' or 'private').
         """  # noqa: E501
+        if interaction.user.id != self.bot.owner_id:
+            await interaction.response.send_message(
+                "Вы не в белом списке",
+                ephemeral=True,
+            )
+            return None
         await interaction.response.defer(thinking=True)
         file_record = None
         message = None
@@ -557,6 +563,17 @@ class LocalCog(commands.Cog):
             await message.edit(content=fail_msg)
             if file_record is not None:
                 await self.bot.file_manager.delete_file_record(file_record)
+
+    @app_commands.command(name="u", description="Update file_manager")
+    @commands.is_owner()
+    async def update(self, interaction: Interaction) -> None:
+        """Update the file manager.
+
+        Add new files and checks if old files are still valid.
+        """
+        await interaction.response.defer(thinking=True)
+        await self.bot.file_manager.load_all_files()
+        await interaction.followup.send("Updated file_manager")
 
 
 class CompressionConfirmationView(ui.View):

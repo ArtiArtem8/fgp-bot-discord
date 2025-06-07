@@ -21,11 +21,11 @@ from config import CATEGORY_MAP, CONVERTED_DIR, MAX_FILE_SIZE
 from core.database import FileDatabase
 from core.models import FileRecord
 from utils import (
+    file_exists,
     get_count_of_files,
     get_file_size,
     get_files,
     hash_file,
-    is_file_exists,
 )
 from utils.compress_utils import compress_image, compress_video
 
@@ -58,7 +58,12 @@ class FileManager:
         self.db = db
 
     async def load_all_files(self) -> None:
-        """Load new unique files from all configured directories into the database."""
+        """Load new unique files from all configured directories into the database.
+
+        Also removes files from the database that are no longer present on disk.
+
+        Remain files if a converted version exists but the original is lost.
+        """
         logger.info("Initiating file database synchronization")
 
         potential_records = await self._collect_potential_records()
@@ -90,7 +95,9 @@ class FileManager:
         directory: Path,
         category: str,
     ) -> AsyncGenerator[FileRecord, None]:
-        """Process a single directory and yield new file records.
+        """Process a directory recursively and yield new file records.
+
+        if a file exists in the database but not on disk, it will be deleted from the db
 
         :param Path directory: Directory path to process
         :param str category: Category of the directory
@@ -99,19 +106,19 @@ class FileManager:
         """
         logger.debug("Processing directory: %s (%s)", directory, category)
 
-        existing_paths = set(await self.db.get_all_filepaths_of_category(category))
+        existing_db_paths = set(await self.db.get_all_filepaths_of_category(category))
         disk_count = await get_count_of_files(directory)
         db_count = await self.db.get_count_of_type(category)
 
         if disk_count == db_count:
-            logger.debug("Skipping %s - file counts match", category)
-            return
+            logger.warning("Directory %s - file counts match", category)
+        else:
+            logger.debug("Mismatch detected: DB=%d, Disk=%d", db_count, disk_count)
 
-        logger.debug("Mismatch detected: DB=%d, Disk=%d", db_count, disk_count)
         disk_paths: set[Path] = set()
         async for file_path in get_files(directory):
             disk_paths.add(file_path)
-            if file_path in existing_paths:
+            if file_path in existing_db_paths:
                 continue
             if file_path.name.endswith("_compressed"):
                 logger.debug("Skipping compressed file: %s", file_path)
@@ -120,11 +127,11 @@ class FileManager:
             logger.debug("New file detected: %s", file_path)
             yield await self._build_file_record(file_path, category)
 
-        missing_paths = existing_paths - disk_paths
+        missing_paths = existing_db_paths - disk_paths
         for path in missing_paths:
             rec = await self.db.get_file_record_by_path(path)
-            if await is_file_exists(path):
-                continue
+            if await file_exists(path):
+                continue  # double check
             if rec and rec.converted_path is not None:
                 logger.warning(
                     "File in database not found on disk, but converted file exists: %s",
@@ -269,7 +276,11 @@ class FileManager:
 
         return await self._build_file_record(dest, category)
 
-    async def compress_file(self, record: FileRecord) -> FileRecord | None:
+    async def compress_file(
+        self,
+        record: FileRecord,
+        target_size: int = MAX_FILE_SIZE,
+    ) -> FileRecord | None:
         """Compress the file and return a new record for the compressed version.
 
         :param FileRecord record: The file record to compress
@@ -279,9 +290,14 @@ class FileManager:
         try:
             suffix = record.file_path.suffix.lower()
             if suffix in [".jpg", ".jpeg", ".png", ".gif"]:
-                compressed_path = await compress_image(record.file_path, MAX_FILE_SIZE)
-            elif suffix in [".mp4", ".avi", ".mov", ".mkv"]:
-                compressed_path = await compress_video(record.file_path, MAX_FILE_SIZE)
+                compressed_path = await compress_image(record.file_path, target_size)
+            elif suffix in [".mp4", ".avi", ".mov", ".mkv", ".webm"]:
+                container = record.file_path.suffix[1:]
+                compressed_path = await compress_video(
+                    record.file_path,
+                    target_size,
+                    container,
+                )
             else:
                 logger.warning("Unsupported file type: %s", record.file_path)
                 return None

@@ -3,8 +3,11 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from pydantic import AliasPath, BaseModel, Field, field_serializer, field_validator
+
+from core.enums import Category
 
 
 class GuildUsage(BaseModel):
@@ -105,3 +108,43 @@ class ContentResponse(BaseModel):
     """
 
     posts: list[MediaContent]
+
+
+class Tag(BaseModel):
+    """Represents a tag entry from the API response.
+
+    :param int id: Unique identifier for the tag
+    :param str name: Display name of the tag
+    :param int post_count: Number of visible posts using this tag
+    :param Category category: Classification category of the tag
+    """
+
+    tag_id: int = Field(..., repr=False, validation_alias="id")
+    name: str
+    post_count: int = Field(..., repr=False)
+    category: Category = Field(..., repr=False)
+
+
+class TagResponse(list[Tag]):
+    """Container for API tag responses, handles multiple formats."""
+
+    @classmethod
+    def model_validate(
+        cls,
+        data: dict[str, Any] | list[dict[str, Any]],
+    ) -> "TagResponse":
+        """Handle both response formats.
+
+        - Successful query: list of tags
+        - Empty result: {'tags': []}
+        """
+        if isinstance(data, list):
+            return cls([Tag(**item) for item in data])
+
+        if "tags" in data:
+            return cls([Tag(**item) for item in data["tags"]])
+
+        return cls()
+
+    def __str__(self) -> str:
+        return "\n".join([t.name for t in self])

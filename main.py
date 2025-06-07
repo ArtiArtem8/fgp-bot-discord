@@ -11,7 +11,13 @@ import logging.config
 from discord import Intents
 from discord.ext import commands
 
-from config import DATABASE_FILE, DISCORD_BOT_PREFIX, DISCORD_BOT_TOKEN, LOGGING_CONFIG
+from config import (
+    DATABASE_FILE,
+    DISCORD_BOT_OWNER_ID,
+    DISCORD_BOT_PREFIX,
+    DISCORD_BOT_TOKEN,
+    LOGGING_CONFIG,
+)
 from core.api_client import APIConfig, MediaAPIClient
 from core.database import FileDatabase
 from core.exceptions import EnvVarError
@@ -38,7 +44,7 @@ class FGPBot(commands.Bot):
         - Extension loading
         - Global command tree synchronization.
         """
-        extensions: list[str] = ["cogs.local_cog"]
+        extensions: list[str] = ["cogs.local_cog", "cogs.api_cog", "cogs.listener_cog"]
         for ext in extensions:
             await self.load_extension(ext)
         cmds = await self.tree.sync()
@@ -62,7 +68,7 @@ async def main() -> None:
     try:
         file_manager = FileManager(db)
         bot = FGPBot(file_manager=file_manager, api_client=api_client)
-
+        bot.owner_id = DISCORD_BOT_OWNER_ID
         async with bot:
             await bot.start(DISCORD_BOT_TOKEN)
     finally:
