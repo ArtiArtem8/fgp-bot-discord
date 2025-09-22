@@ -10,12 +10,13 @@ import logging
 import os
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any
+from typing import Any, Self
 
 import aiohttp
 from aiolimiter import AsyncLimiter
 
 from core.enums import Category, DateRange, FileType, Rating, SortOrder
+from core.exceptions import APIError, EnvVarError
 from core.models import ContentResponse, TagResponse
 
 logger = logging.getLogger(__name__)
@@ -60,25 +61,84 @@ class ContentParams:
         return " ".join(tags).strip()
 
 
-class APIError(Exception):
-    """Exception raised for errors in API."""
-
-
+@dataclass(frozen=True)
 class APIConfig:
-    """Configuration class for APIClient."""
+    """Configuration for API client interaction.
 
-    def __init__(self) -> None:
-        """Initialize the configuration with environment variables or defaults."""
-        self.username: str | None = os.getenv("MEDIA_USERNAME")
-        self.api_key: str | None = os.getenv("MEDIA_API_KEY")
-        if (user_agent := os.getenv("MEDIA_USER_AGENT")) is None:
-            msg = "User-Agent must be provided"
-            raise ValueError(msg)
-        self.user_agent: str = user_agent
-        self.base_url: str | None = os.getenv("MEDIA_BASE_URL")
-        self.max_requests: int = int(os.getenv("MEDIA_MAX_REQUESTS", "2"))
-        self.max_workers: int = int(os.getenv("MEDIA_MAX_WORKERS", "2"))
-        self.request_timeout: int = int(os.getenv("MEDIA_REQUEST_TIMEOUT", "10"))
+    Holds API credentials and settings for managing requests.
+
+    :param str username: API username
+    :param str api_key: API key for authentication
+    :param str user_agent: User agent string for requests
+    :param str base_url: Base URL of the API
+    :param int max_workers: Maximum number of concurrent workers (default: 2)
+    :param int max_requests: Maximum number of requests per session (default: 2)
+    :param int request_timeout: Request timeout in seconds (default: 10)
+    """
+
+    username: str
+    api_key: str
+    user_agent: str
+    base_url: str
+    max_workers: int = 2
+    max_requests: int = 2
+    request_timeout: int = 10
+
+    def __post_init__(self) -> None:
+        """Validate the base URL format after initialization."""
+        if not self.base_url.startswith("https://"):
+            msg = "Base URL must start with https:// (got %s)"
+            logger.error(msg, self.base_url)
+            raise ValueError(msg % self.base_url)
+
+    @classmethod
+    def from_env(cls) -> Self:
+        """Create config from environment variables.
+
+        :return APIConfig: Config object
+        :raises EnvVarError: If any required environment variable is missing
+        """
+        required_vars = [
+            "MEDIA_USERNAME",
+            "MEDIA_API_KEY",
+            "MEDIA_USER_AGENT",
+            "MEDIA_BASE_URL",
+        ]
+        env_vars = {var: os.getenv(var, "") for var in required_vars}
+        if not all(env_vars.values()):
+            raise EnvVarError(
+                var_name=", ".join(var for var, value in env_vars.items() if not value),
+            )
+
+        if env_vars["MEDIA_BASE_URL"].endswith("/"):
+            env_vars["MEDIA_BASE_URL"] = env_vars["MEDIA_BASE_URL"][:-1]
+            logger.warning(
+                "MEDIA_BASE_URL ends with a slash (removed at runtime).",
+            )
+
+        def env_int(name: str, default: int) -> int:
+            """Get an integer value from an environment variable or a default value."""
+            if (value := os.getenv(name)) is None:
+                return default
+            try:
+                return int(value)
+            except ValueError:
+                logger.warning(
+                    "Invalid value for %s. Using default: %d",
+                    name,
+                    default,
+                )
+                return default
+
+        return cls(
+            username=env_vars["MEDIA_USERNAME"],
+            api_key=env_vars["MEDIA_API_KEY"],
+            user_agent=env_vars["MEDIA_USER_AGENT"],
+            base_url=env_vars["MEDIA_BASE_URL"],
+            max_workers=env_int("MEDIA_MAX_WORKERS", 2),
+            max_requests=env_int("MEDIA_MAX_REQUESTS", 2),
+            request_timeout=env_int("MEDIA_REQUEST_TIMEOUT", 10),
+        )
 
 
 class MediaAPIClient:
@@ -125,9 +185,6 @@ class MediaAPIClient:
         :return Dict[str, str]: Headers with User-Agent and Authorization
         :raises ValueError: If username or API key is missing
         """
-        if not self.config.username or not self.config.api_key:
-            msg = "Username and API key must be provided"
-            raise ValueError(msg)
         auth: str = base64.b64encode(
             f"{self.config.username}:{self.config.api_key}".encode(),
         ).decode()
@@ -206,8 +263,9 @@ class MediaAPIClient:
         :param ContentParams | None content_params: Content parameters (default: None)
         :param str | None page: Page number or cursor for pagination (default: None)
         :return ContentResponse: Model containing the API response
-        :raises Exception: If the API request fails or returns an error
         :raises APIError: If the API response is not a dictionary
+        :raises ClientConnectorError: If cannot connect to the API
+        :raises Exception: (also) If the API request fails or returns an error
         """
         if content_params is None:
             content_params = ContentParams()  # defaults are none
@@ -283,8 +341,8 @@ class MediaAPIClient:
         :param str endpoint: API endpoint (e.g., "posts.json")
         :param dict[str, Any] params: Query parameters for the request
         :return ResponseData: Processed API response
-        :raises Exception: If the connection fails
         :raises APIError: If the API status code indicates an error
+        :raises ClientConnectorError: If cannot connect to the API
         """
         future: asyncio.Future[ResponseResult] = asyncio.Future()
         url = f"{self.config.base_url}/{endpoint}"
@@ -308,6 +366,7 @@ class MediaAPIClient:
         :param int status: HTTP status code
         :return ResponseData: Parsed response data
         :raises APIError: If the status code indicates an error
+
         """
         if HTTPStatus(status).is_success:
             return data

@@ -11,3 +11,10 @@ wheels/
 fgp-bot-discord.code-workspace
 .env
 data/
+
+# Documentation
+/docs/
+/documentation/
+
+# Temporary files
+__doc_cache__/

@@ -516,7 +516,7 @@ class LocalCog(commands.Cog):
         :param discord.Attachment file: The file attachment to add.
         :param str category: The category for the file (e.g., 'meme' or 'private').
         """  # noqa: E501
-        if interaction.user.id != self.bot.owner_id:
+        if interaction.user.id != self.bot.owner_id:  # TODO: Add whitelist
             await interaction.response.send_message(
                 "Вы не в белом списке",
                 ephemeral=True,

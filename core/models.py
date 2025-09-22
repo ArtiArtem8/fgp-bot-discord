@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from pydantic import AliasPath, BaseModel, Field, field_serializer, field_validator
 
@@ -132,7 +132,7 @@ class TagResponse(list[Tag]):
     def model_validate(
         cls,
         data: dict[str, Any] | list[dict[str, Any]],
-    ) -> "TagResponse":
+    ) -> Self:
         """Handle both response formats.
 
         - Successful query: list of tags
@@ -147,4 +147,8 @@ class TagResponse(list[Tag]):
         return cls()
 
     def __str__(self) -> str:
+        """Return a string representation of the tag names, joined by newlines.
+
+        :return str: Newline-separated string of tag names.
+        """
         return "\n".join([t.name for t in self])

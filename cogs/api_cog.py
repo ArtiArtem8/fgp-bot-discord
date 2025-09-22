@@ -4,11 +4,13 @@ import io
 import logging
 import secrets
 
+import aiohttp
+import aiohttp.client_exceptions
 import discord
 from discord import Interaction, app_commands
 from discord.ext import commands
 
-from core.api_client import ContentParams
+from core.api_client import APIError, ContentParams
 from core.enums import Category, DateRange, FileType, Rating, SortOrder
 from main import FGPBot
 
@@ -82,21 +84,23 @@ class ApiCog(commands.Cog):
             msg = f"You are not in an NSFW channel. {emoji}"
             await interaction.response.send_message(msg, ephemeral=True)
             return
-        if interaction.user.id != self.bot.owner_id:
+        if (
+            interaction.user.id != self.bot.owner_id and False
+        ):  # TODO: Add whitelist  # noqa: E501, FIX002, SIM223, TD002, TD003
             await interaction.response.send_message(
                 "Вы не в белом списке",
                 ephemeral=True,
             )
             return
         await interaction.response.defer(thinking=True)
+        params = ContentParams(
+            tags=tags.split(),
+            rating=rating,
+            file_type=file_type,
+            sort_order=sort_order,
+            date_range=date_range,
+        )
         try:
-            params = ContentParams(
-                tags=tags.split(),
-                rating=rating,
-                file_type=file_type,
-                sort_order=sort_order,
-                date_range=date_range,
-            )
             res = await self.bot.api_client.get_content(content_params=params)
             random_res = secrets.choice(res.posts)
             data = await self.bot.api_client.download_file(random_res.file.url)
@@ -107,9 +111,16 @@ class ApiCog(commands.Cog):
                     filename=f"{random_res.file.hash}.{random_res.file.extension}",
                 ),
             )
+        except APIError:
+            await interaction.followup.send("API Error occurred, try again later")
+            return
+        except aiohttp.client_exceptions.ClientConnectorError:
+            await interaction.followup.send("Connection Error, try again later")
+            return
         except Exception:
             logger.exception("Failed to get posts")
             await interaction.followup.send("Failed to get posts")
+            return
 
     @app_commands.command(name="t", description="Get a tag list")
     async def tags(
@@ -139,7 +150,9 @@ class ApiCog(commands.Cog):
             msg = f"You are not in an NSFW channel. {emoji}"
             await interaction.response.send_message(msg, ephemeral=True)
             return
-        if interaction.user.id != self.bot.owner_id:
+        if (
+            interaction.user.id != self.bot.owner_id and False
+        ):  # TODO: Add whitelist  # noqa: E501, FIX002, SIM223, TD002, TD003
             await interaction.response.send_message(
                 "Вы не в белом списке",
                 ephemeral=True,

@@ -47,8 +47,6 @@ class ListenerCog(commands.Cog):
             emoji_pool = self._get_available_emojis(message)
             await message.add_reaction(secrets.choice(emoji_pool or ["👍"]))
 
-        await self.bot.process_commands(message)  # CRITICAL: DO NOT DELETE
-
     def _get_available_emojis(self, message: Message) -> list[Emoji]:
         """Get available static emojis from appropriate source.
 

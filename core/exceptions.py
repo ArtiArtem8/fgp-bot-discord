@@ -10,5 +10,9 @@ class EnvVarError(Exception):
         :param var_name: The name of the environment variable that is missing or invalid
         :type var_name: str:
         """
-        super().__init__(f"Required environment variable '{var_name}' is not set.")
+        super().__init__(f"Missing required environment variable '{var_name}'.")
         self.var_name = var_name
+
+
+class APIError(Exception):
+    """Exception raised for errors in API."""

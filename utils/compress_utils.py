@@ -36,7 +36,12 @@ async def get_video_duration(file_path: Path) -> float | None:
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        logger.error("ffprobe failed for %s (return code %d): %s", file_path, proc.returncode, stderr.decode().strip())
+        logger.error(
+            "ffprobe failed for %s (return code %d): %s",
+            file_path,
+            proc.returncode,
+            stderr.decode().strip(),
+        )
         return None
     try:
         return float(stdout.strip())

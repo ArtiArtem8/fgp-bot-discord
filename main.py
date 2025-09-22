@@ -18,10 +18,7 @@ from config import (
     DISCORD_BOT_TOKEN,
     LOGGING_CONFIG,
 )
-from core.api_client import APIConfig, MediaAPIClient
-from core.database import FileDatabase
-from core.exceptions import EnvVarError
-from core.file_manager import FileManager
+from core import APIConfig, EnvVarError, FileDatabase, FileManager, MediaAPIClient
 
 logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("FGPBot")
@@ -44,18 +41,23 @@ class FGPBot(commands.Bot):
         - Extension loading
         - Global command tree synchronization.
         """
-        extensions: list[str] = ["cogs.local_cog", "cogs.api_cog", "cogs.listener_cog"]
+        extensions: list[str] = [
+            "cogs.local_cog",
+            "cogs.api_cog",
+            "cogs.listener_cog",
+            "cogs.no_prefix_cog",
+        ]
         for ext in extensions:
             await self.load_extension(ext)
-        cmds = await self.tree.sync()
-        logger.info("Synced %d global commands", len(cmds))
-        logger.debug("Synced commands: %s", cmds)
+        # cmds = await self.tree.sync()
+        # logger.info("Synced %d global commands", len(cmds))
+        # logger.debug("Synced commands: %s", cmds)
 
 
 async def main() -> None:
     """Async function to start the bot and manage resources."""
     logger.info("Starting FGPBot")
-    config = APIConfig()
+    config = APIConfig.from_env()
 
     if DISCORD_BOT_TOKEN is None:
         msg = "DISCORD_BOT_TOKEN"
