@@ -507,7 +507,7 @@ class FileManager:
                     file_id,
                 )
                 return None
-            return record
+            return records[0]
         return None
 
     async def get_file_record_by_hash(self, file_hash: str) -> FileRecord | None:

@@ -8,6 +8,7 @@ import datetime
 import logging
 import secrets
 from pathlib import Path
+from typing import Literal
 
 import discord
 from discord import Interaction, WebhookMessage, app_commands, ui
@@ -63,6 +64,26 @@ class LocalCog(commands.Cog):
                 for emoji in (guild.emojis if guild else self.bot.emojis)
                 if not emoji.animated and emoji.available
             ],
+        )
+
+    def _log_command(self, interaction: Interaction) -> None:
+        """Log a command invocation.
+
+        :param Interaction interaction: The interaction context.
+        """
+        logger.debug(
+            "%(user_name)s#%(user_discriminator)s called command %(command_name)s "
+            "in channel %(channel_name)s of guild %(guild_name)s",
+            {
+                "user_name": interaction.user.name,
+                "user_discriminator": interaction.user.discriminator,
+                "command_name": interaction.command.name if interaction.command else "",
+                "channel_name": interaction.channel.name
+                if not isinstance(interaction.channel, discord.DMChannel)
+                and interaction.channel
+                else "DM",
+                "guild_name": interaction.guild if interaction.guild else "N/A",
+            },
         )
 
     async def edit(
@@ -215,41 +236,94 @@ class LocalCog(commands.Cog):
         identifier: str,
         content_type: str,
     ) -> None:
-        """Send a file by its identifier, with size limit checks and user confirmation.
+        """Send a file by its identifier, with size limit checks and compression option.
 
         :param Interaction interaction: The interaction context.
         :param WebhookMessage message: The message to update with status.
         :param str identifier: The file identifier (e.g., hash, filename).
         :param str content_type: The type of content (e.g., 'meme' or 'private').
         """
-        file = await self._get_file_by_identifier(message, identifier, content_type)
-        if not file:
+        file_data = await self._get_file_by_identifier(
+            message,
+            identifier,
+            content_type,
+        )
+        if not file_data:
             return
-        file_path = file[1]
-        file_hash = file[0].file_hash
+
+        file_record, file_path = file_data
         await self.edit(message, content="File Found!")
-        if not self.is_file_record_within_size_limit(file[0]):
-            if file_path == file[0].file_path:
-                file_size = file[0].file_size
-            else:
-                file_size = file[0].converted_size or 16**6
-                file_hash = file[0].converted_hash or file_hash
-            size_str = self.human_readable_size(file_size)
-            msg = f"File is too large to send ({size_str})"
-            view = SendingConfirmationView(15)
-            await self.edit(message, content=msg, view=view)
-            await view.wait()
-            if view.choice is None:
-                msg = "⏰ Confirmation timed out"
-                await self.edit(message, content=msg, view=None)
-                return
-            if not view.choice:
-                msg = "Cancelled"
-                await self.edit(message, content=msg, view=None)
-                return
+
+        if self.is_file_record_within_size_limit(file_record):
+            suffix = file_path.suffix.lower()
+            file_hash = (
+                file_record.converted_hash or file_record.file_hash
+                if file_path != file_record.file_path
+                else file_record.file_hash
+            )
+            file_name = f"{file_hash}{suffix}"
+            await self.send_file(interaction, message, file_path, file_name)
+            return
+
+        file_size = (
+            file_record.converted_size or file_record.file_size
+            if file_path != file_record.file_path
+            else file_record.file_size
+        )
+        size_str = self.human_readable_size(file_size)
+
         suffix = file_path.suffix.lower()
-        file_name = f"{file_hash}{suffix}"
-        await self.send_file(interaction, message, file_path, file_name)
+        is_compressible = suffix in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".mkv",
+            ".webm",
+        }
+
+        if is_compressible:
+            view = CompressionOptionView(30, file_record)
+            msg = (
+                f"File is too large to send ({size_str})\n"
+                "Would you like to try compressing it first?"
+            )
+        else:
+            view = SendingConfirmationView(15)
+            msg = f"File is too large to send ({size_str})"
+
+        await self.edit(message, content=msg, view=view)
+        await view.wait()
+
+        if view.choice is None:
+            msg = "⏰ Confirmation timed out"
+            await self.edit(message, content=msg, view=None)
+            return
+
+        if not view.choice:
+            msg = "Cancelled"
+            await self.edit(message, content=msg, view=None)
+            return
+
+        if is_compressible and view.choice == "compress":
+            await self._handle_compression_flow(
+                interaction,
+                message,
+                file_record,
+                is_new_file=False,
+            )
+        else:
+            suffix = file_path.suffix.lower()
+            file_hash = (
+                file_record.converted_hash or file_record.file_hash
+                if file_path != file_record.file_path
+                else file_record.file_hash
+            )
+            file_name = f"{file_hash}{suffix}"
+            await self.send_file(interaction, message, file_path, file_name)
 
     async def send_random_file(
         self,
@@ -298,6 +372,7 @@ class LocalCog(commands.Cog):
         :param Interaction interaction: The interaction context.
         :param str identifier: The file identifier, if provided.
         """
+        self._log_command(interaction)
         if interaction.channel is None:
             await interaction.response.send_message(
                 "No channel available",
@@ -338,6 +413,7 @@ class LocalCog(commands.Cog):
         :param Interaction interaction: The interaction context.
         :param str identifier: The file identifier, if provided.
         """
+        self._log_command(interaction)
         if interaction.channel is None or isinstance(
             interaction.channel,
             (discord.GroupChannel, discord.Thread),
@@ -436,38 +512,15 @@ class LocalCog(commands.Cog):
                 return
 
             # Perform compression
-            message = await self.edit(
+            await self._handle_compression_flow(
+                interaction,
                 message,
-                content="🔄 Compressing file... ",
-                view=None,
+                file_record,
+                is_new_file=True,
             )
-            try:
-                compressed_record = await self.bot.file_manager.compress_file(
-                    file_record,
-                )
-                if compressed_record is None:
-                    await self.edit(message, content="❌ Compression failed")
-                    await self.bot.file_manager.delete_file_record(file_record)
-                    return
-                compressed_record = FileRecord(
-                    file_path=file_record.file_path,
-                    file_hash=file_record.file_hash,
-                    file_size=file_record.file_size,
-                    category=file_record.category,
-                    created_at=file_record.created_at,
-                    converted_path=compressed_record.file_path,
-                    converted_hash=compressed_record.file_hash,
-                    converted_size=compressed_record.file_size,
-                )
-                await self.bot.file_manager.delete_original_file(file_record)
-            except Exception as e:
-                logger.exception("Failed to compress file")
-                await self.edit(message, content=f"❌ Compression failed: {e!s}")
-                await self.bot.file_manager.delete_file_record(file_record)
-                return
-            else:
-                file_record = compressed_record or file_record
+            return
 
+        # File is within size limit, add directly
         try:
             final_record = await self.bot.file_manager.add_file_to_db(file_record)
             if not final_record:
@@ -482,6 +535,91 @@ class LocalCog(commands.Cog):
             logger.exception("Failed to add file")
             await interaction.followup.send(f"❌ Failed to add file: {e!s}")
             await self.bot.file_manager.delete_file_record(file_record)
+
+    async def _handle_compression_flow(
+        self,
+        interaction: Interaction,
+        message: WebhookMessage,
+        file_record: FileRecord,
+        *,
+        is_new_file: bool = False,
+    ) -> None:
+        """Handle the file compression flow with user feedback.
+
+        :param Interaction interaction: The interaction context.
+        :param WebhookMessage message: The message to update with status.
+        :param FileRecord file_record: The file record to compress.
+        :param bool is_new_file: Whether this is a new file being added.
+        """
+        await self.edit(message, content="🔄 Compressing file...", view=None)
+
+        try:
+            compressed_record = await self.bot.file_manager.compress_file(file_record)
+            if not compressed_record:
+                await self.edit(message, content="❌ Compression failed")
+                if is_new_file:
+                    await self.bot.file_manager.delete_file_record(file_record)
+                return
+
+            if is_new_file:
+                final_record = FileRecord(
+                    file_path=file_record.file_path,
+                    file_hash=file_record.file_hash,
+                    file_size=file_record.file_size,
+                    category=file_record.category,
+                    created_at=file_record.created_at,
+                    converted_path=compressed_record.file_path,
+                    converted_hash=compressed_record.file_hash,
+                    converted_size=compressed_record.file_size,
+                )
+                await self.bot.file_manager.delete_original_file(file_record)
+
+                final_record = await self.bot.file_manager.add_file_to_db(final_record)
+                if not final_record:
+                    await self.edit(message, content="Failed to add compressed file")
+                    return
+
+                success_msg = (
+                    "✅ Successfully compressed and added file!\n"
+                    + self._record_display(final_record)
+                )
+                await self.edit(message, content=success_msg)
+            else:
+                updated_record = await self.bot.file_manager.db.update_converted_file(
+                    file_record.file_hash,
+                    compressed_record.file_path,
+                    compressed_record.file_hash,
+                    compressed_record.file_size,
+                )
+
+                if not updated_record:
+                    await self.edit(message, content="Failed to update file record")
+                    return
+
+                compressed_size = self.human_readable_size(compressed_record.file_size)
+                original_size = self.human_readable_size(file_record.file_size)
+
+                suffix = compressed_record.file_path.suffix.lower()
+                file_name = f"{compressed_record.file_hash}{suffix}"
+
+                success = await self.send_file(
+                    interaction,
+                    message,
+                    compressed_record.file_path,
+                    file_name,
+                )
+
+                if success:
+                    await self.edit(
+                        message,
+                        content=f"Compressed! ({original_size} → {compressed_size})",
+                    )
+
+        except Exception as e:
+            logger.exception("Compression flow failed")
+            await self.edit(message, content=f"Compression failed: {e!s}")
+            if is_new_file:
+                await self.bot.file_manager.delete_file_record(file_record)
 
     def _record_display(self, file_record: FileRecord) -> str:
         """Generate a formatted string displaying the file record.
@@ -510,12 +648,14 @@ class LocalCog(commands.Cog):
         file: discord.Attachment,
         category: str,
     ) -> None:
-        """Add a new file to the database, handling downloads, duplicate, and compression.
+        """Add new file to the database, handling downloads, duplicate, and compression.
 
         :param Interaction interaction: The interaction context.
         :param discord.Attachment file: The file attachment to add.
         :param str category: The category for the file (e.g., 'meme' or 'private').
-        """  # noqa: E501
+        """
+        self._log_command(interaction)
+
         if interaction.user.id != self.bot.owner_id:  # TODO: Add whitelist
             await interaction.response.send_message(
                 "Вы не в белом списке",
@@ -564,6 +704,106 @@ class LocalCog(commands.Cog):
             if file_record is not None:
                 await self.bot.file_manager.delete_file_record(file_record)
 
+    @app_commands.command(name="r", description="Remove a file by hash (owner only)")
+    @commands.is_owner()
+    async def remove_file(
+        self,
+        interaction: Interaction,
+        file_hash: str,
+        delete_from_disk: bool = False,  # noqa: FBT001, FBT002
+    ) -> None:
+        """Remove a file from the database and optionally from disk.
+
+        :param Interaction interaction: The interaction context.
+        :param str file_hash: The hash of the file to remove.
+        :param bool delete_from_disk: Whether to also delete the file from disk.
+        """
+        self._log_command(interaction)
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        # Find the file record
+        file_record = await self.bot.file_manager.get_file_record_by_hash(file_hash)
+        if not file_record:
+            await interaction.followup.send(
+                f"File with hash `{file_hash}` not found in database.",
+                ephemeral=True,
+            )
+            return
+
+        emoji = self._get_random_emoji(interaction.guild)
+        message = await interaction.followup.send(
+            f"Found file: {file_record.file_path.name} {emoji}",
+            wait=True,
+            ephemeral=True,
+        )
+
+        try:
+            await self.bot.file_manager.db.delete_file_record_by_hash(file_hash)
+            response_msg = f"Removed file record for `{file_hash}` from database."
+            if delete_from_disk:
+                if file_record.file_path.exists():
+                    file_record.file_path.unlink()
+                    response_msg += (
+                        f"\nDeleted original file: `{file_record.file_path}`"
+                    )
+                if file_record.converted_path and file_record.converted_path.exists():
+                    file_record.converted_path.unlink()
+                    response_msg += (
+                        f"\nDeleted converted file: `{file_record.converted_path}`"
+                    )
+            else:
+                response_msg += (
+                    f"\nOriginal file: `{file_record.file_path}`"
+                    f"\nConverted file: `{file_record.converted_path}`"
+                )
+            await self.edit(message, content=response_msg)
+        except Exception as e:
+            logger.exception("Failed to remove file")
+            await self.edit(
+                message,
+                content=f"Failed to remove file: {e!s}",
+            )
+
+    @app_commands.command(name="i", description="Show database info or file details")
+    @commands.is_owner()
+    async def info(self, interaction: Interaction, identifier: str) -> None:
+        """Show database summary or detailed file information.
+
+        :param Interaction interaction: The interaction context.
+        :param str file_hash: file identifier to show specific file details.
+        """
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        message = await interaction.followup.send(
+            f"Searching for file: {identifier}",
+            wait=True,
+            ephemeral=True,
+        )
+        file_record = await self.bot.file_manager.find_file(identifier, MEME)
+        if not file_record:
+            file_record = await self.bot.file_manager.find_file(
+                identifier,
+                PRIVATE,
+            )
+        if not file_record:
+            await self.edit(
+                message,
+                content=f"❌ File `{identifier}` not found.",
+            )
+            return
+        original_path = file_record.file_path.as_posix()
+        converted_path = (
+            file_record.converted_path.as_posix()
+            if file_record.converted_path
+            else None
+        )
+        info_msg = "**File Information**\n"
+        info_msg += self._record_display(file_record)
+        info_msg += f"- Paths: main=`{original_path}`, converted=`{converted_path}`\n"
+        info_msg += f"- Created: {format_dt(file_record.created_at)}\n"
+
+        await self.edit(message, content=info_msg)
+
     @app_commands.command(name="u", description="Update file_manager")
     @commands.is_owner()
     async def update(self, interaction: Interaction) -> None:
@@ -571,6 +811,7 @@ class LocalCog(commands.Cog):
 
         Add new files and checks if old files are still valid.
         """
+        self._log_command(interaction)
         await interaction.response.defer(thinking=True)
         await self.bot.file_manager.load_all_files()
         await interaction.followup.send("Updated file_manager")
@@ -635,6 +876,48 @@ class SendingConfirmationView(ui.View):
         button: ui.Button["SendingConfirmationView"],  # noqa: ARG002
     ) -> None:
         self.choice = False
+        self.stop()
+
+    async def on_timeout(self) -> None:  # noqa: D102
+        self.choice = None
+
+
+class CompressionOptionView(ui.View):
+    """A view for choosing between compression or sending the original file."""
+
+    def __init__(self, timeout: float, file_record: FileRecord) -> None:  # noqa: D107
+        super().__init__(timeout=timeout)
+        self.file_record = file_record
+        self.choice: Literal["compress", "send", None] = None
+
+    @ui.button(label="Try to Compress", style=discord.ButtonStyle.green)
+    async def compress(  # noqa: D102
+        self,
+        interaction: Interaction,
+        button: ui.Button["CompressionOptionView"],  # noqa: ARG002
+    ) -> None:
+        await interaction.response.defer()
+        self.choice = "compress"
+        self.stop()
+
+    @ui.button(label="Send Anyway", style=discord.ButtonStyle.blurple)
+    async def send_anyway(  # noqa: D102
+        self,
+        interaction: Interaction,
+        button: ui.Button["CompressionOptionView"],  # noqa: ARG002
+    ) -> None:
+        await interaction.response.defer()
+        self.choice = "send"
+        self.stop()
+
+    @ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    async def cancel(  # noqa: D102
+        self,
+        interaction: Interaction,
+        button: ui.Button["CompressionOptionView"],  # noqa: ARG002
+    ) -> None:
+        await interaction.response.defer()
+        self.choice = None
         self.stop()
 
     async def on_timeout(self) -> None:  # noqa: D102
