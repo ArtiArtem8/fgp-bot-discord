@@ -15,7 +15,7 @@ DISCORD_BOT_OWNER_ID = int(os.getenv("DISCORD_BOT_OWNER_ID", "0"))
 ROOT_DIR = Path(__file__).parent
 
 REACT_CHANCE = 160  # 0.625%
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 mega bytes
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 DATA_DIR = ROOT_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,6 +31,7 @@ MEME_DIR = DATA_DIR / "memes"
 MEME_DIR.mkdir(parents=True, exist_ok=True)
 
 PRIVATE_DIR = DATA_DIR / "private"
+# PRIVATE_DIR = Path(r"E:\Python\fgpbot\Data\(NSFW)File_Restore")  # noqa: ERA001
 PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
 
 CATEGORY_MAP: dict[Path, str] = {

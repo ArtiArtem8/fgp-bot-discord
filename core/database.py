@@ -2,7 +2,8 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 import aiosqlite
 
@@ -15,17 +16,57 @@ class FileDatabase:
     """Database class for storing and retrieving file records."""
 
     def __init__(self, db_path: Path) -> None:
-        """Initialize the FileDatabase with the specified database path."""
+        """Initialize the FileDatabase with the specified DB path."""
         self.db_path = db_path
+        self._conn: aiosqlite.Connection | None = None
+
+    async def __aenter__(self) -> Self:
+        """Async context manager entry."""
+        await self.connect()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Async context manager exit."""
+        await self.close()
 
     async def connect(self) -> None:
-        """Connect to the database and create tables if they don't exist."""
+        """Establish database connection and initialize schema.
+
+        :raises RuntimeError: If already connected. Call close() first.
+        """
+        if self._conn is not None:
+            msg = "Database already connected. Call close() before reconnecting."
+            raise RuntimeError(
+                msg,
+            )
+
         logger.debug("Connecting to database: %s", self.db_path)
-        self.conn = await aiosqlite.connect(self.db_path)
-        self.conn.row_factory = aiosqlite.Row
+        self._conn = await aiosqlite.connect(self.db_path)
+        self._conn.row_factory = aiosqlite.Row
         await self._create_tables()
 
+    async def close(self) -> None:
+        """Close the database connection."""
+        if hasattr(self, "conn") and self.conn:
+            await self.conn.close()
+            self._conn = None
+            logger.debug("Database connection closed")
+
+    @property
+    def conn(self) -> aiosqlite.Connection:
+        """Get active connection, raising error if not connected."""
+        if self._conn is None:
+            msg = "Database not connected. Call connect() first."
+            raise RuntimeError(msg)
+        return self._conn
+
     async def _create_tables(self) -> None:
+        """Initialize database schema with tables and indexes."""
         await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS file_tracking (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +83,9 @@ class FileDatabase:
         """)
         await self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_file_hash ON file_tracking (file_hash)
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_category ON file_tracking (category)
         """)
         await self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_guild_usage
@@ -109,7 +153,7 @@ class FileDatabase:
         return FileRecord.model_validate(row_dict)
 
     async def get_file_record_by_hash(self, file_hash: str) -> FileRecord | None:
-        """Get a file record from the database by file hash.
+        """Get a file record from the database by file hash or its converted version.
 
         :param file_hash: The file hash of the file record to retrieve.
         :type file_hash: str
@@ -157,7 +201,7 @@ class FileDatabase:
                 await cursor.execute(sql, (guild_id, guild_id, guild_id, file_hash))
                 updated = await cursor.fetchone()
                 if not updated:
-                    await cursor.execute("ROLLBACK")
+                    await self.conn.rollback()
                     return None
                 await self.conn.commit()
                 return await self._row_to_file_record(updated)
@@ -225,23 +269,27 @@ class FileDatabase:
                 return None
             return await self._row_to_file_record(updated)
 
-    async def delete_file_record_by_hash(self, file_hash: str) -> None:
+    async def delete_file_record_by_hash(self, file_hash: str) -> bool:
         """Delete a file record from the database.
 
         :param str file_hash: The file hash of the file record to delete.
+        :return bool: True if the file record was successfully deleted, False otherwise.
         """
         sql = "DELETE FROM file_tracking WHERE file_hash = ?"
-        async with self.conn.cursor() as cursor:
-            await cursor.execute(sql, (file_hash,))
-            await self.conn.commit()
+        try:
+            async with self.conn.execute(sql, (file_hash,)) as cursor:
+                await self.conn.commit()
+                return cursor.rowcount > 0
+        except aiosqlite.Error:
+            logger.exception("Failed to delete file record: %s", file_hash)
+            await self.conn.rollback()
+            return False
 
     async def get_file_record_by_path(self, file_path: Path) -> FileRecord | None:
-        """Get a file record from the database based on its file path.
+        """Get a file record from the database based on its exact file path.
 
-        :param file_path: The file path of the file record to retrieve.
-        :type file_path: Path
-        :return: The file record if found, otherwise None.
-        :rtype: FileRecord | None
+        :param Path file_path: The file path of the file record to retrieve.
+        :return FileRecord | None: The file record if found, otherwise None.
         """
         sql = "SELECT * FROM file_tracking WHERE file_path = ?"
         async with self.conn.cursor() as cursor:
@@ -251,16 +299,21 @@ class FileDatabase:
                 return None
             return await self._row_to_file_record(row)
 
-    async def delete_file_record_by_path(self, file_path: Path) -> None:
+    async def delete_file_record_by_path(self, file_path: Path) -> bool:
         """Delete a file record from the database based on its file path.
 
-        :param file_path: The file path of the file record to delete.
-        :type file_path: Path
+        :param Path file_path: The file path of the file record to delete.
+        :return bool: True if the file record was successfully deleted, False otherwise.
         """
         sql = "DELETE FROM file_tracking WHERE file_path = ?"
-        async with self.conn.cursor() as cursor:
-            await cursor.execute(sql, (str(file_path),))
-            await self.conn.commit()
+        try:
+            async with self.conn.execute(sql, (str(file_path),)) as cursor:
+                await self.conn.commit()
+                return cursor.rowcount > 0
+        except aiosqlite.Error:
+            logger.exception("Failed to delete by path: %s", file_path)
+            await self.conn.rollback()
+            return False
 
     async def get_count_of_type(
         self,
@@ -268,10 +321,8 @@ class FileDatabase:
     ) -> int:
         """Get the count of file records for a specific category.
 
-        :param category: The category of the file records to count.
-        :type category: str
-        :return: The count of file records for the specified category.
-        :rtype: int
+        :param str category: The category of the file records to count.
+        :return int: The count of file records for the specified category.
         """
         sql = "SELECT COUNT(*) FROM file_tracking WHERE category = ?"
         async with self.conn.cursor() as cursor:
@@ -284,8 +335,7 @@ class FileDatabase:
     async def get_unsent_files(self, guild_id: str, category: str) -> list[FileRecord]:
         """Get all file records that have not been sent.
 
-        :return: A list of file records that have not been sent.
-        :rtype: list[FileRecord]
+        :return list[FileRecord]: A list of file records that have not been sent.
         """
         sql = """
         SELECT *
@@ -305,8 +355,7 @@ class FileDatabase:
     async def get_files_larger_than(self, size: int) -> list[FileRecord]:
         """Get all file records that are larger than a specific size.
 
-        :param size: The size in bytes to compare against
-        :type size: int
+        :param int size: The size in bytes to compare against
         :return: A list of file records that are larger than the specified size.
         :rtype: list[FileRecord]
         """
@@ -319,8 +368,7 @@ class FileDatabase:
     async def get_all_file_hashes(self) -> tuple[str, ...]:
         """Get all file hashes from the database.
 
-        :return: A tuple of file hashes.
-        :rtype: tuple[str, ...]
+        :return tuple[str, ...]: A tuple of file hashes.
         """
         sql = "SELECT file_hash FROM file_tracking"
         async with self.conn.cursor() as cursor:
@@ -331,10 +379,8 @@ class FileDatabase:
     async def get_all_filepaths_of_category(self, category: str) -> tuple[Path, ...]:
         """Get all file paths of a specific category.
 
-        :param category: The category of the file records to retrieve.
-        :type category: str
-        :return: A tuple of file paths.
-        :rtype: tuple[Path, ...]
+        :param str category: The category of the file records to retrieve.
+        :return tuple[Path, ...]: A tuple of file paths.
         """
         sql = "SELECT file_path FROM file_tracking WHERE category = ?"
         async with self.conn.cursor() as cursor:
@@ -345,8 +391,8 @@ class FileDatabase:
     async def get_file_records_by_filename(self, filename: str) -> list[FileRecord]:
         """Get all file records by filename using a LIKE query.
 
-        :param str filename: _description_
-        :return list[FileRecord]: _description_
+        :param str filename: Partial filename or path to search for
+        :return list[FileRecord]: Matching file records
         """
         sql = "SELECT * FROM file_tracking WHERE file_path LIKE ?"
         async with self.conn.cursor() as cursor:

@@ -36,9 +36,11 @@
     "python.testing.pytestEnabled": true,
     "cSpell.words": [
         "booru",
+        "exitstatus",
         "favcount",
         "KBPS",
         "mpixels",
-        "tagcount"
+        "tagcount",
+        "terminalreporter"
     ]
 }

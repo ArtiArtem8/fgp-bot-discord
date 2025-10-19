@@ -13,7 +13,7 @@ from typing import Literal
 import discord
 from discord import Interaction, WebhookMessage, app_commands, ui
 from discord.ext import commands
-from discord.utils import format_dt
+from discord.utils import MISSING, format_dt
 
 from config import CATEGORY_MAP, MAX_FILE_SIZE, MEME_DIR, PRIVATE_DIR
 from core.models import FileRecord
@@ -23,7 +23,9 @@ logger = logging.getLogger("LocalCog")
 
 
 MEME = CATEGORY_MAP.get(MEME_DIR, "meme")
-PRIVATE = CATEGORY_MAP.get(PRIVATE_DIR, "private")
+"""Category name for memes."""
+PRIVATE = CATEGORY_MAP.get(PRIVATE_DIR, "private")  # private category
+"""Category name for private content."""
 
 
 class LocalCog(commands.Cog):
@@ -51,7 +53,7 @@ class LocalCog(commands.Cog):
             else f"user_{interaction.user.id}"
         )
 
-    def _get_random_emoji(self, guild: discord.Guild | None) -> discord.Emoji:
+    def get_random_emoji(self, guild: discord.Guild | None) -> discord.Emoji:
         """Retrieve a random static emoji from the guild or the bot's emojis.
 
         :param discord.Guild | None guild: The guild to fetch emojis from,
@@ -90,20 +92,24 @@ class LocalCog(commands.Cog):
         self,
         message: WebhookMessage,
         *,
-        content: str | None = None,
-        view: ui.View | None = None,
+        content: str | None = MISSING,
+        view: ui.View | None = MISSING,
+        embed: discord.Embed | None = MISSING,
     ) -> WebhookMessage:
         """Edits the message and applies a random static emoji.
 
         :param WebhookMessage message: The message to edit.
         :param str | None content: The new content to set, if provided.
         :param ui.View | None view: The new view to set, if provided.
+        :param discord.Embed | None embed: The new embed to set, if provided.
         :return WebhookMessage: The edited message.
         """
-        emoji: discord.Emoji = self._get_random_emoji(message.guild)
+        emoji: discord.Emoji = self.get_random_emoji(message.guild)
         if content:
             content = content + " " + str(emoji)
-        return await message.edit(content=content, view=view)
+        if embed:
+            embed.add_field(name=" ", value=str(emoji))
+        return await message.edit(content=content, view=view, embed=embed)
 
     def is_file_record_within_size_limit(self, file: FileRecord) -> bool:
         """Check if a file record is within the size limit.
@@ -382,7 +388,7 @@ class LocalCog(commands.Cog):
 
         await interaction.response.defer(thinking=True, ephemeral=True)
         message = await interaction.followup.send(
-            f"Searching for meme... {self._get_random_emoji(interaction.guild)}",
+            f"Searching for meme... {self.get_random_emoji(interaction.guild)}",
             wait=True,
             silent=True,
             ephemeral=True,
@@ -418,20 +424,20 @@ class LocalCog(commands.Cog):
             interaction.channel,
             (discord.GroupChannel, discord.Thread),
         ):
-            msg = f"You are not in channel {self._get_random_emoji(interaction.guild)}"
+            msg = f"You are not in channel {self.get_random_emoji(interaction.guild)}"
             await interaction.response.send_message(msg, ephemeral=True)
             return None
         if (
             not isinstance(interaction.channel, discord.DMChannel)
             and not interaction.channel.nsfw
         ):
-            emoji = self._get_random_emoji(interaction.guild)
+            emoji = self.get_random_emoji(interaction.guild)
             msg = f"You are not in an NSFW channel. {emoji}"
             await interaction.response.send_message(msg, ephemeral=True)
             return None
         await interaction.response.defer(thinking=True, ephemeral=True)
         message = await interaction.followup.send(
-            f"Searching for private... {self._get_random_emoji(interaction.guild)}",
+            f"Searching for private... {self.get_random_emoji(interaction.guild)}",
             wait=True,
             silent=True,
             ephemeral=True,
@@ -463,7 +469,7 @@ class LocalCog(commands.Cog):
         :return str: The human-readable size string.
         """
         unit_size = 1024.0
-        for unit in ["B", "KB", "MB", "GB", "TB", "PB"]:
+        for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
             if size < unit_size:
                 return f"{size:.2f} {unit}"
             size /= unit_size
@@ -511,7 +517,6 @@ class LocalCog(commands.Cog):
                 await self.bot.file_manager.delete_file_record(file_record)
                 return
 
-            # Perform compression
             await self._handle_compression_flow(
                 interaction,
                 message,
@@ -520,7 +525,6 @@ class LocalCog(commands.Cog):
             )
             return
 
-        # File is within size limit, add directly
         try:
             final_record = await self.bot.file_manager.add_file_to_db(file_record)
             if not final_record:
@@ -572,7 +576,6 @@ class LocalCog(commands.Cog):
                     converted_hash=compressed_record.file_hash,
                     converted_size=compressed_record.file_size,
                 )
-                await self.bot.file_manager.delete_original_file(file_record)
 
                 final_record = await self.bot.file_manager.add_file_to_db(final_record)
                 if not final_record:
@@ -658,7 +661,7 @@ class LocalCog(commands.Cog):
 
         if interaction.user.id != self.bot.owner_id:  # TODO: Add whitelist
             await interaction.response.send_message(
-                "Вы не в белом списке",
+                "You are not in the whitelist",
                 ephemeral=True,
             )
             return None
@@ -680,7 +683,7 @@ class LocalCog(commands.Cog):
                     "⚠️ File already exists in database!\n"
                     + self._record_display(db_rec),
                 )
-                await self.bot.file_manager.delete_file_record(file_record)
+                self.bot.file_manager.try_unlink(file_record.file_path)
                 return None
 
             message = await message.edit(
@@ -731,7 +734,7 @@ class LocalCog(commands.Cog):
             )
             return
 
-        emoji = self._get_random_emoji(interaction.guild)
+        emoji = self.get_random_emoji(interaction.guild)
         message = await interaction.followup.send(
             f"Found file: {file_record.file_path.name} {emoji}",
             wait=True,
@@ -779,30 +782,67 @@ class LocalCog(commands.Cog):
             wait=True,
             ephemeral=True,
         )
-        file_record = await self.bot.file_manager.find_file(identifier, MEME)
-        if not file_record:
-            file_record = await self.bot.file_manager.find_file(
-                identifier,
-                PRIVATE,
-            )
-        if not file_record:
-            await self.edit(
-                message,
-                content=f"❌ File `{identifier}` not found.",
-            )
+        if not (records := await self.bot.file_manager.find_files(identifier)):
+            await self.edit(message, content=f"File `{identifier}` not found.")
             return
+
+        if len(records) == 1:
+            await self.edit(message, embed=self.format_file_info(records[0]))
+            return
+        view = FileInfoPaginationView(records, self, timeout=120)
+        embed = view.get_current_embed(interaction)
+        await self.edit(message=message, embed=embed, view=view)
+
+    def format_file_info(self, file_record: FileRecord) -> discord.Embed:
+        """Format file record information for display.
+
+        :param FileRecord file_record: The file record to format
+        :return discord.Embed: Formatted file information
+        """
+        embed = discord.Embed(
+            title="File information",
+            timestamp=file_record.created_at,
+        )
+        embed.add_field(
+            name="Hash",
+            value=f"`{file_record.file_hash}`",
+        )
+        embed.add_field(
+            name="Category",
+            value=file_record.category,
+        )
+        embed.add_field(
+            name="Size",
+            value=self.human_readable_size(file_record.file_size),
+        )
+        embed.add_field(
+            name="Created at",
+            value=format_dt(file_record.created_at, "R"),
+        )
+        embed.add_field(
+            name="Converted Size",
+            value=self.human_readable_size(file_record.converted_size)
+            if file_record.converted_size
+            else "Not converted",
+        )
+        embed.add_field(
+            name="Converted Hash",
+            value=f"`{file_record.converted_hash}`"
+            if file_record.converted_size
+            else "Not converted",
+        )
         original_path = file_record.file_path.as_posix()
         converted_path = (
             file_record.converted_path.as_posix()
             if file_record.converted_path
             else None
         )
-        info_msg = "**File Information**\n"
-        info_msg += self._record_display(file_record)
-        info_msg += f"- Paths: main=`{original_path}`, converted=`{converted_path}`\n"
-        info_msg += f"- Created: {format_dt(file_record.created_at)}\n"
-
-        await self.edit(message, content=info_msg)
+        embed.add_field(
+            name="Paths",
+            value=f"main=`{original_path}`, converted=`{converted_path}`",
+            inline=False,
+        )
+        return embed
 
     @app_commands.command(name="u", description="Update file_manager")
     @commands.is_owner()
@@ -888,7 +928,7 @@ class CompressionOptionView(ui.View):
     def __init__(self, timeout: float, file_record: FileRecord) -> None:  # noqa: D107
         super().__init__(timeout=timeout)
         self.file_record = file_record
-        self.choice: Literal["compress", "send", None] = None
+        self.choice: Literal["compress", "send", None, False] = None
 
     @ui.button(label="Try to Compress", style=discord.ButtonStyle.green)
     async def compress(  # noqa: D102
@@ -917,11 +957,86 @@ class CompressionOptionView(ui.View):
         button: ui.Button["CompressionOptionView"],  # noqa: ARG002
     ) -> None:
         await interaction.response.defer()
-        self.choice = None
+        self.choice = False
         self.stop()
 
     async def on_timeout(self) -> None:  # noqa: D102
         self.choice = None
+
+
+class FileInfoPaginationView(ui.View):
+    """A view for paginating through multiple file info results."""
+
+    def __init__(
+        self,
+        records: list[FileRecord],
+        cog: LocalCog,
+        timeout: float = 120,
+    ) -> None:
+        """Init.
+
+        :param list[FileRecord] records: A list of FileRecords to paginate through.
+        :param LocalCog cog: The LocalCog instance associated with the view.
+        :param float timeout: The timeout for the view in seconds.
+        """
+        super().__init__(timeout=timeout)
+        self.records = records
+        self.cog = cog
+        self.current_index = 0
+
+    def get_current_embed(self, interaction: Interaction) -> discord.Embed:
+        """Get the formatted embed for the current page.
+
+        :return discord.Embed: Formatted embed with pagination info
+        """
+        current_index = self.current_index % len(self.records)
+        current_record = self.records[current_index]
+        embed = self.cog.format_file_info(current_record)
+        pagination_info = f" | Page {current_index + 1}/{len(self.records)}"
+        emoji = self.cog.get_random_emoji(interaction.guild)
+        embed.add_field(name="", value=str(emoji))
+        embed.set_footer(
+            text=(embed.footer.text or "") + pagination_info,
+        )
+        return embed
+
+    @ui.button(label="Prev", style=discord.ButtonStyle.blurple)
+    async def previous_button(
+        self,
+        interaction: Interaction,
+        button: ui.Button["FileInfoPaginationView"],  # noqa: ARG002
+    ) -> None:
+        """Navigate to the previous file record."""
+        self.current_index -= 1
+        embed = self.get_current_embed(interaction)
+        await interaction.response.edit_message(embed=embed)
+
+    @ui.button(label="Next", style=discord.ButtonStyle.blurple)
+    async def next_button(
+        self,
+        interaction: Interaction,
+        button: ui.Button["FileInfoPaginationView"],  # noqa: ARG002
+    ) -> None:
+        """Navigate to the next file record."""
+        self.current_index += 1
+        embed = self.get_current_embed(interaction)
+        await interaction.response.edit_message(embed=embed)
+
+    @ui.button(label="Stop", style=discord.ButtonStyle.red)
+    async def stop_button(
+        self,
+        interaction: Interaction,
+        button: ui.Button["FileInfoPaginationView"],  # noqa: ARG002
+    ) -> None:
+        """Stop the pagination and remove the view."""
+        embed = self.get_current_embed(interaction)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        """Handle view timeout by removing buttons."""
+        for item in self.children:
+            item.disabled = True  # pyright: ignore[reportAttributeAccessIssue]
 
 
 async def setup(bot: FGPBot) -> None:

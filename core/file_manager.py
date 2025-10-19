@@ -232,7 +232,7 @@ class FileManager:
                 file_record.file_path,
             )
             return
-        self._try_unlink(file_record.file_path)
+        self.try_unlink(file_record.file_path)
 
     async def download_file(
         self,
@@ -361,7 +361,7 @@ class FileManager:
         )
         return None
 
-    def _try_unlink(self, path: Path) -> None:
+    def try_unlink(self, path: Path) -> None:
         """Attempt to delete the specified file path, logging any errors.
 
         :param Path path: The file path to delete
@@ -369,6 +369,9 @@ class FileManager:
         try:
             if path.exists():
                 path.unlink()
+                logger.debug("Unlinked %s.", path)
+            else:
+                logger.debug("File not found: %s", path)
         except Exception:
             logger.exception("Failed to unlink %s.", path)
 
@@ -377,9 +380,9 @@ class FileManager:
 
         :param FileRecord file_record: The file record to delete
         """
-        self._try_unlink(file_record.file_path)
+        self.try_unlink(file_record.file_path)
         if file_record.converted_path:
-            self._try_unlink(file_record.converted_path)
+            self.try_unlink(file_record.converted_path)
         await self.db.delete_file_record_by_hash(file_record.file_hash)
 
     async def increment_send_count(self, file_hash: str, guild_id: str) -> None:
@@ -427,7 +430,7 @@ class FileManager:
         if existing_record:
             logger.info("File already exists in database: %s", file_path)
             if existing_record.file_path != file_path:
-                self._try_unlink(file_path)
+                self.try_unlink(file_path)
             return existing_record
 
         # Insert into database
@@ -451,7 +454,7 @@ class FileManager:
 
         # Skip already compressed files
         if file_record.converted_path:
-            logger.info("File already compressed: %s", file_record.file_path)
+            logger.warning("File already compressed: %s", file_record.file_path)
             return file_record
 
         compressed_record = await self.compress_file(file_record)
@@ -479,36 +482,64 @@ class FileManager:
     async def find_file(self, file_id: str, category: str) -> FileRecord | None:
         """Find a file by its identifier and category.
 
+        Returns if exactly one match is found else None.
+
         :param str file_id: The file identifier (hash or filename)
         :param str category: The category of the file
-        :return: The file record if found, otherwise None
-        :rtype: FileRecord | None
+        :return FileRecord | None: The file record if found, otherwise None
         """
-        record = await self.db.get_file_record_by_hash(file_id)
-        if record:
-            if record.category != category:
-                logger.warning(
-                    "Found a file with the same hash but different category: %s",
-                    file_id,
-                )
-                return None
+        records = await self.find_files(file_id, category)
+
+        # prioritize exact hash match
+        if any((record := r).file_hash == file_id for r in records):
             return record
-        records = await self.db.get_file_records_by_filename(file_id)
+        if len(records) > 1:
+            logger.warning(
+                "Found multiple files with the same filename: %s",
+                file_id,
+            )
+            return None
         if records:
-            if len(records) > 1:
-                logger.warning(
-                    "Found multiple files with the same filename: %s",
-                    file_id,
-                )
-                return None
-            if records[0].category != category:
-                logger.warning(
-                    "Found a file with the same filename but different category: %s",
-                    file_id,
-                )
-                return None
             return records[0]
         return None
+
+    async def find_files(
+        self,
+        file_id: str,
+        category: str | None = None,
+    ) -> list[FileRecord]:
+        """Find files by identifier and optionally filter by category.
+
+        Returns multiple files when searching by filename, as multiple
+        files can have the same name but different hashes.
+
+        :param str file_id: The file identifier (hash or filename)
+        :param str | None category: Optional category to filter results
+        :return list[FileRecord]: List of matching file records
+        """
+        results: dict[str, FileRecord] = {}
+
+        record_by_hash = await self.db.get_file_record_by_hash(file_id)
+        if record_by_hash:
+            if category is None or record_by_hash.category == category:
+                results[record_by_hash.file_hash] = record_by_hash
+            if category and record_by_hash.category != category:
+                logger.warning(
+                    "File with hash %s is in category %s, not %s",
+                    file_id,
+                    record_by_hash.category,
+                    category,
+                )
+
+        records_by_name = {
+            r.file_hash: r
+            for r in await self.db.get_file_records_by_filename(file_id)
+            if r.category == category or category is None
+        }
+
+        results.update(records_by_name)
+        logger.debug("Found %d file records for %s", len(results), file_id)
+        return list(results.values())
 
     async def get_file_record_by_hash(self, file_hash: str) -> FileRecord | None:
         """Retrieve a file record by its hash.

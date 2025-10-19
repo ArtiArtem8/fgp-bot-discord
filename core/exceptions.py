@@ -16,3 +16,18 @@ class EnvVarError(Exception):
 
 class APIError(Exception):
     """Exception raised for errors in API."""
+
+
+class BotNotInitializedError(RuntimeError):
+    """Raised when bot resources are accessed before initialization."""
+
+    def __init__(self, resource_name: str) -> None:
+        """Initialize error with resource name.
+
+        :param resource_name: Name of the resource that wasn't initialized.
+        :type resource_name: str
+        """
+        super().__init__(
+            f"{resource_name} accessed before initialization. "
+            f"Ensure setup_hook has completed successfully.",
+        )
